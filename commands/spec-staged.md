@@ -1,0 +1,5 @@
+- Look at the staged files
+- Ensure related spec files are updated accordingly
+- Ensure all documentation is up to date
+- Make the changes
+- Stage the changes
