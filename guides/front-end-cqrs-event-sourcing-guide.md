@@ -736,6 +736,152 @@ class Queries {
 - When accounts can have vastly different data sizes
 - When you need to selectively sync/export account data
 
+### Storing Preferences in Root DB Config
+
+For app-wide preferences that should persist independently of event sourcing (like UI settings, filters, etc.), store them in the root database config object keyed by account ID.
+
+**Why separate from events:**
+
+- Preferences are UI state, not domain events
+- Don't need audit trail for UI preferences
+- Faster read/write without event overhead
+- No need to replay events for preference changes
+
+**Implementation:**
+
+Add methods to `MultipleEventStore` to manage config:
+
+```javascript
+// In MultipleEventStore
+async getConfig(dbId) {
+  return await this._config.getItem(dbId) || {}
+}
+
+async updateConfig(dbId, updates) {
+  const config = await this.getConfig(dbId)
+  const newConfig = { ...config, ...updates }
+  await this.setConfig(dbId, newConfig)
+  return newConfig
+}
+```
+
+**Root DB Structure:**
+
+```javascript
+// Root DB (_config) stores account configs
+{
+  "account-123-uuid": {
+    preferences: {
+      contentFilter: "video",
+      sidebarCollapsed: false,
+      theme: "dark"
+    }
+  },
+  "account-456-uuid": {
+    preferences: {
+      contentFilter: null,
+      theme: "light"
+    }
+  }
+}
+```
+
+**Commands for preferences:**
+
+```javascript
+// src/commands/index.js
+class Commands {
+  async updatePreference(account, key, value) {
+    const config = await this.state.getConfig(account.id)
+    const preferences = { ...(config.preferences || {}) }
+    preferences[key] = value
+
+    await this.state.updateConfig(account.id, { preferences })
+  }
+
+  async getPreferences(account) {
+    const config = await this.state.getConfig(account.id)
+    return config.preferences || {}
+  }
+}
+```
+
+**Queries for preferences:**
+
+```javascript
+// src/queries/index.js
+class Queries {
+  async getPreferences(account) {
+    const config = await this.state.getConfig(account.id)
+    return config.preferences || {}
+  }
+
+  async getPreferenceValue(account, key, defaultValue = null) {
+    const preferences = await this.getPreferences(account)
+    return preferences[key] ?? defaultValue
+  }
+}
+```
+
+**Usage in components:**
+
+```javascript
+// Load preferences on mount
+export default {
+  data() {
+    return {
+      preferences: {}  // Cached from root DB
+    }
+  },
+
+  computed: {
+    contentFilter() {
+      return this.preferences.contentFilter || null
+    }
+  },
+
+  async mounted() {
+    // Load preferences from root DB config
+    this.preferences = await this.app.queries.getPreferences(this.account)
+  },
+
+  methods: {
+    async changeContentFilter(value) {
+      // Update preference in root DB config
+      await this.app.commands.updatePreference(this.account, 'contentFilter', value)
+
+      // Refresh local cache
+      this.preferences = await this.app.queries.getPreferences(this.account)
+    }
+  }
+}
+```
+
+**Key differences from event-sourced data:**
+
+| Event Store | Root DB Config |
+|-------------|----------------|
+| Domain events | UI preferences |
+| Immutable events | Mutable config |
+| Full audit trail | Current state only |
+| Event replay | Direct read/write |
+| Runs through runners | No processing |
+| Accounts, feeds, items | Preferences, settings |
+
+**Best practices:**
+
+1. **Use for UI state only**: Don't store domain data in config
+2. **Cache in components**: Load once on mount, refresh after updates
+3. **Account-scoped**: Each account has its own preferences
+4. **Don't abuse**: Only for true preferences, not domain state
+5. **Async aware**: Always await config operations
+6. **Encapsulate access**: Use Commands/Queries, never access `_config` directly
+
+**When to use config vs events:**
+
+- ✅ Config: UI theme, filter selections, collapsed panels, sort order
+- ❌ Events: User data, feeds, items, tags, account info
+
 ---
 
 ## CQRS Implementation
