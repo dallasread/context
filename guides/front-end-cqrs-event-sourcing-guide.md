@@ -128,6 +128,11 @@ class EventStore {
 
   // Add a new event
   track(collection, objectId, action, data, time, version) {
+    // Generate UUID if objectId not provided
+    if (!objectId) {
+      objectId = uuid()
+    }
+
     const event = new EventStoreEvent(collection, objectId, action, data, time, version)
 
     // Run the event to update state
@@ -168,6 +173,238 @@ class EventStore {
   }
 }
 ```
+
+### UUID Generation
+
+**Important:** UUID generation is centralized in the Event Store, not in Commands.
+
+The Event Store automatically generates UUIDs when `objectId` is `null` or `undefined`:
+
+```javascript
+// In EventStore.track()
+track(collection, objectId, action, data, time, version) {
+  // Generate UUID if objectId not provided
+  if (!objectId) {
+    objectId = uuid()
+  }
+  // ... rest of method
+  return event
+}
+```
+
+**Commands retrieve the generated ID from the returned event:**
+
+```javascript
+// ✅ Correct: Event Store generates ID
+addFeed(feed) {
+  const event = this.track(feed.accountId, 'feeds', null, 'create', feed)
+  feed.id = event.objectId  // Get ID from event
+  return feed
+}
+
+// ❌ Incorrect: Don't generate UUIDs in commands
+addFeed(feed) {
+  feed.id = uuid()  // Don't do this!
+  this.track(feed.accountId, 'feeds', feed.id, 'create', feed)
+  return feed
+}
+```
+
+**Benefits of centralizing UUID generation:**
+
+- **Single source of truth**: All IDs generated in one place
+- **Consistency**: Same pattern across all commands
+- **Simpler commands**: Commands don't need uuid imports
+- **Easier testing**: Mock the event store to control IDs
+- **Event-driven**: IDs are part of the event creation process
+
+### Querying After Creation (CQRS Best Practice)
+
+**Important:** Commands should track events, then query for the newly created entity. There are two patterns depending on whether the entity needs pre-allocated resources (like a database).
+
+#### Pattern 1: Pre-allocate Resources (e.g., Accounts with Databases)
+
+When creating an entity that needs resources created before tracking (like an account that needs its own database), create the resource first to get the ID, then track with that ID.
+
+**✅ Good: Create DB first, then track with ID**
+
+```javascript
+addAccount(account) {
+  // Create a database for this account and get the ID
+  account.id = this.state.createDB(null)
+
+  // Track account creation with the generated ID
+  this.track(null, 'accounts', account.id, 'create', account)
+
+  // Query for the newly created account
+  return this.queries.findAccount(account.id)
+}
+```
+
+**Why this works:**
+- `createDB()` generates and returns a UUID
+- We assign that UUID to `account.id`
+- We track with that specific UUID as the `objectId`
+- We can immediately query by that ID
+
+#### Pattern 2: Let Event Store Generate ID (e.g., Feeds, Tags, Items)
+
+For most entities, let the event store generate the ID, then query for the newly created entity using the returned event's objectId.
+
+**✅ Good: Track with null objectId, then query by generated ID**
+
+```javascript
+addFeed(feed) {
+  // Track feed creation (event store generates ID)
+  const event = this.track(feed.accountId, 'feeds', null, 'create', feed)
+
+  // Query for the newly created feed by the generated ID
+  return this.queries.findFeed(event.objectId)
+}
+
+addTag(tag) {
+  // Track tag creation (event store generates ID)
+  const event = this.track(tag.accountId, 'tags', null, 'create', tag)
+
+  // Query for the newly created tag
+  return this.queries.findTag(event.objectId)
+}
+
+addItem(item) {
+  // Get accountId from the feed
+  const feed = this.queries.findFeed(item.feedId)
+  const accountId = feed?.accountId
+
+  // Track item creation (event store generates ID)
+  const event = this.track(accountId, 'items', null, 'create', item)
+
+  // Query for the newly created item
+  return this.queries.findItem(event.objectId)
+}
+```
+
+**Why this works:**
+- Tracking with `null` objectId tells event store to generate a UUID
+- The returned event contains the generated `objectId`
+- We immediately query by that ID to get the full object with all computed fields
+
+**❌ Bad: Manually constructing return object**
+
+```javascript
+// Don't do this - manually building the return object
+addFeed(feed) {
+  const event = this.track(feed.accountId, 'feeds', null, 'create', feed)
+  return {
+    ...feed,
+    id: event.objectId  // Missing any computed/derived fields!
+  }
+}
+```
+
+**Why this is bad:**
+- Manually constructing objects bypasses query logic
+- Missing computed fields that queries may add
+- Not following CQRS separation (command shouldn't construct query results)
+
+**Required query methods:**
+
+```javascript
+// In Queries class - simple findById queries
+findAccount(id) {
+  return this.state.findAll(undefined, 'accounts')
+    .find(account => account.id === id)
+}
+
+findFeed(id) {
+  return this.state.findAll(undefined, 'feeds')
+    .find(feed => feed.id === id)
+}
+
+findTag(id) {
+  return this.state.findAll(undefined, 'tags')
+    .find(tag => tag.id === id)
+}
+
+findItem(id) {
+  return this.state.findAll(undefined, 'items')
+    .find(item => item.id === id)
+}
+```
+
+**Key points:**
+- State layer automatically filters deleted items (use `findAllWithDeleted()` if you need them)
+- Queries work across all databases when passed `undefined` as dbId
+- IDs are unique globally, not just within a database
+- Simple and predictable: query by ID immediately after creation
+
+**Deleted items handling:**
+
+The EventStore manages deleted item filtering at the state layer:
+
+```javascript
+// In EventStore
+findAll(collection) {
+  const items = this._state[collection] || []
+  return items.filter(item => !item._deleted)  // Auto-filter deleted
+}
+
+findAllWithDeleted(collection) {
+  return this._state[collection] || []  // Include deleted items
+}
+```
+
+This means queries don't need to check `!item._deleted` - the state layer handles it automatically. Only use `findAllWithDeleted()` when you explicitly need deleted items (e.g., for audit trails or undo functionality).
+
+**Why this matters:**
+
+- **Strict CQRS separation**: Commands change state, queries read state
+- **Consistent pattern**: All create operations follow the same flow
+- **Testability**: Can test commands and queries independently
+- **Flexibility**: Query logic can change without affecting commands
+- **Single responsibility**: Commands execute, queries retrieve
+
+### Architectural Layering: State Management Responsibilities
+
+**Key principle: The state layer manages data concerns, queries perform business logic.**
+
+**State Layer (EventStore) Responsibilities:**
+- Filter deleted items by default
+- Manage multiple databases (MultipleEventStore)
+- Handle event persistence and replay
+- Provide raw data access
+
+**Query Layer Responsibilities:**
+- Business logic filters (e.g., items for specific feed)
+- Sorting and ordering
+- Derived computations
+- Aggregations
+
+**Anti-pattern:**
+
+```javascript
+// ❌ Bad: Queries filtering deleted items
+allAccounts() {
+  return this.state.findAll(undefined, 'accounts')
+    .filter(account => !account._deleted)  // State layer should handle this
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+```
+
+**Correct pattern:**
+
+```javascript
+// ✅ Good: State handles deletion, queries handle business logic
+allAccounts() {
+  return this.state.findAll(undefined, 'accounts')  // Already filtered by state
+    .sort((a, b) => a.name.localeCompare(b.name))   // Query adds sorting
+}
+```
+
+**Benefits:**
+- DRY: Deletion filtering in one place (state layer)
+- Consistency: Can't forget to filter deleted items
+- Clear separation: State manages data lifecycle, queries perform business operations
+- Easy to override: Use `findAllWithDeleted()` when you explicitly need deleted items
 
 ### Event Runners (Reducers)
 
@@ -401,13 +638,13 @@ class Commands {
 
   // Account commands use root DB (dbId = null)
   addAccount(account) {
-    account.id = account.id || uuid()
+    // Track account creation (event store generates ID)
+    const event = this.track(null, 'accounts', account.id, 'create', account)
+    account.id = event.objectId
 
     // Create isolated database for this account
     this.state.createDB(account.id)
 
-    // Store account in root DB
-    this.track(null, 'accounts', account.id, 'create', account)
     return account
   }
 
@@ -420,23 +657,21 @@ class Commands {
 
   // Feed commands use account-specific DB
   addFeed(feed) {
-    feed.id = feed.id || uuid()
-
-    // Store in account-specific database
-    this.track(feed.accountId, 'feeds', feed.id, 'create', feed)
+    // Store in account-specific database (event store generates ID)
+    const event = this.track(feed.accountId, 'feeds', feed.id, 'create', feed)
+    feed.id = event.objectId
     return feed
   }
 
   // Item commands lookup accountId from feed
   addItem(item) {
-    item.id = item.id || uuid()
-
     // Get accountId from feed
     const feed = this.queries.findFeed(item.feedId)
     const accountId = feed?.accountId
 
-    // Store in account-specific database
-    this.track(accountId, 'items', item.id, 'create', item)
+    // Store in account-specific database (event store generates ID)
+    const event = this.track(accountId, 'items', item.id, 'create', item)
+    item.id = event.objectId
     return item
   }
 
@@ -540,10 +775,11 @@ class Commands {
 
   // Add checkpoint to journey
   addCheckpointToJourney(journey, checkpoint) {
-    checkpoint.id = checkpoint.id || uuid()
     checkpoint.order = checkpoint.order ?? this.queries.findAllCheckpointsForJourney(journey).length
 
-    this.track(journey, 'checkpoints', checkpoint.id, 'create', checkpoint)
+    // Event store will generate ID
+    const event = this.track(journey, 'checkpoints', checkpoint.id, 'create', checkpoint)
+    checkpoint.id = event.objectId
   }
 
   // Remove checkpoint (soft delete)
@@ -554,12 +790,13 @@ class Commands {
   // Complete a checkpoint
   completeCheckpointForJourney(journey, checkpoint) {
     const completion = {
-      id: uuid(),
       checkpointId: checkpoint.id,
       completedAt: Date.now()
     }
 
-    this.track(journey, 'checkpointCompletions', completion.id, 'create', completion)
+    // Event store will generate ID
+    const event = this.track(journey, 'checkpointCompletions', null, 'create', completion)
+    completion.id = event.objectId
   }
 
   // Core tracking method
@@ -1332,6 +1569,82 @@ describe('Event Replay', () => {
 3. **Cached**: Use computed properties in Vue
 4. **Specific**: Create queries for each use case
 5. **Filter deleted**: Exclude soft-deleted items
+6. **Never filter in components**: All filtering, sorting, and data manipulation must be done in Queries
+
+**❌ Bad: Filtering in components**
+
+```javascript
+// In Vue component
+computed: {
+  selectedFeeds() {
+    // Don't filter in components!
+    return this.feeds.filter(feed => feed.tags && feed.tags.includes(this.tag.id))
+  },
+
+  filteredItems() {
+    // Don't filter in components!
+    return this.items.filter(item => item.author === this.selectedAuthor)
+  }
+}
+```
+
+**✅ Good: Create query methods**
+
+```javascript
+// In Queries class
+feedsForTag(tag) {
+  const accountId = tag.accountId
+  return this.state.findAll(accountId, 'feeds')
+    .filter(feed => !feed._deleted && feed.tags && feed.tags.includes(tag.id))
+    .sort((a, b) => a.title.localeCompare(b.title))
+}
+
+feedIdsForTag(tag) {
+  return this.feedsForTag(tag).map(feed => feed.id)
+}
+
+itemsForFeedByAuthor(feed, author) {
+  return this.itemsForFeed(feed)
+    .filter(item => item.author === author)
+}
+
+findTagByName(account, name) {
+  const tags = this.tagsForAccount(account)
+  const matching = tags.filter(t => t.name === name)
+  return matching[matching.length - 1] // Most recently created
+}
+
+// In Vue component
+computed: {
+  selectedFeeds() {
+    // Use query method
+    return this.app.queries.feedsForTag(this.tag)
+  },
+
+  selectedFeedIds() {
+    // Use specialized query method
+    return this.app.queries.feedIdsForTag(this.tag)
+  },
+
+  filteredItems() {
+    // Use query method with parameters
+    if (this.selectedAuthor) {
+      return this.app.queries.itemsForFeedByAuthor(this.feed, this.selectedAuthor)
+    }
+    return this.app.queries.itemsForFeed(this.feed)
+  }
+}
+```
+
+**Why this matters:**
+
+- **Single responsibility**: Components handle UI, Queries handle data access
+- **Reusability**: Query methods can be used across multiple components
+- **Testability**: Query logic can be tested independently
+- **Performance**: Complex queries can be optimized in one place
+- **Maintainability**: Data access patterns are centralized
+- **Type safety**: Easier to document and type-check query methods
+- **Consistency**: All filtering follows the same patterns
 
 ### State Management
 
@@ -1394,8 +1707,9 @@ export class Commands {
   }
 
   addTodo(todo) {
-    todo.id = uuid()
-    this.state.track('todos', todo.id, 'create', todo)
+    // Event store generates ID
+    const event = this.state.track('todos', null, 'create', todo)
+    todo.id = event.objectId
   }
 
   completeTodo(todo) {
@@ -1485,4 +1799,4 @@ The pattern works exceptionally well with Vue's reactivity system, providing aut
 
 ---
 
-*Last updated: 2025-11-07*
+*Last updated: 2025-11-08*
