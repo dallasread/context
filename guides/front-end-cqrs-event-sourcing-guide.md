@@ -283,6 +283,224 @@ class MultiEventStore {
 }
 ```
 
+### MultipleEventStore Pattern (Extended)
+
+For applications with account-based isolation where each account needs its own database:
+
+```javascript
+import { v4 as uuidv4 } from 'uuid'
+import EventStore from './event-store.js'
+
+class MultipleEventStore extends EventStore {
+  constructor(name, version, runners = {}) {
+    super(name, version, runners)
+    this._config = this._db      // Root DB stores account configs
+    this._dbs = {}                // Map of accountId -> EventStore
+
+    // Get unique collection names from runners
+    const collectionNames = new Set()
+    for (const key in runners) {
+      collectionNames.add(key.split('.')[0])
+    }
+
+    // Define read-only properties for each collection
+    for (const collectionName of collectionNames) {
+      Object.defineProperty(this, collectionName, {
+        get: () => this.findAll(undefined, collectionName),
+        set: () => {
+          throw new Error(`Cannot set read-only attribute: ${collectionName}`)
+        }
+      })
+    }
+  }
+
+  // Create a new database for an account
+  createDB(dbId) {
+    dbId = dbId || uuidv4()
+    this.setConfig(dbId, {})
+    this._initDB(dbId)
+    return dbId
+  }
+
+  // Delete account database
+  deleteDB(dbId) {
+    const db = this._dbs[dbId]
+    delete this._dbs[dbId]
+    return Promise.all([
+      db.teardown(),
+      this._config.removeItem(dbId)
+    ])
+  }
+
+  // Track event in specific database
+  track(dbId, collection, objectId, action, data) {
+    const dbs = this._findDBs(dbId ? [dbId] : undefined)
+    const promises = dbs.map((db) => db.track(collection, objectId, action, data))
+    return Promise.all(promises)
+  }
+
+  // Find all items in collection, optionally filtered by database
+  findAll(dbId, collection) {
+    const dbs = this._findDBs(dbId ? [dbId] : undefined)
+    return dbs.reduce((items, db) => {
+      return items.concat(db.findAll(collection))
+    }, []).sort(EventStore.SORT_BY_DATE)
+  }
+
+  // Restore all account databases
+  restore() {
+    return this._config
+      .iterate((value, dbId) => {
+        this._initDB(dbId)
+      })
+      .then(() => {
+        const promises = []
+        for (const key in this._dbs) {
+          promises.push(this._dbs[key].restore())
+        }
+        return Promise.all(promises)
+      })
+  }
+
+  // Initialize a specific account database
+  _initDB(dbId) {
+    const db = new EventStore(`${this._name}-${dbId}`, this._version, this._runners)
+    this._dbs[dbId] = db
+    return db
+  }
+
+  // Find databases by IDs, or all if no IDs provided
+  _findDBs(dbIds) {
+    if (!dbIds || !dbIds.length) {
+      return Object.values(this._dbs)
+    }
+
+    return Object.values(this._dbs).filter(db =>
+      dbIds.includes(db._name.split('-').pop())
+    )
+  }
+}
+```
+
+**Key differences from MultiEventStore:**
+
+1. **Extends EventStore**: Inherits base functionality
+2. **Root database**: Config database stores account metadata
+3. **Lazy initialization**: Account databases created on-demand
+4. **Unified API**: Single interface for querying across accounts or specific accounts
+5. **Automatic cleanup**: Deleting account removes its database
+
+**Usage with Commands:**
+
+```javascript
+class Commands {
+  constructor({ state, queries }) {
+    this.state = state  // MultipleEventStore instance
+    this.queries = queries
+  }
+
+  // Account commands use root DB (dbId = null)
+  addAccount(account) {
+    account.id = account.id || uuid()
+
+    // Create isolated database for this account
+    this.state.createDB(account.id)
+
+    // Store account in root DB
+    this.track(null, 'accounts', account.id, 'create', account)
+    return account
+  }
+
+  removeAccount(account) {
+    this.track(null, 'accounts', account.id, 'delete')
+
+    // Delete account's database
+    this.state.deleteDB(account.id)
+  }
+
+  // Feed commands use account-specific DB
+  addFeed(feed) {
+    feed.id = feed.id || uuid()
+
+    // Store in account-specific database
+    this.track(feed.accountId, 'feeds', feed.id, 'create', feed)
+    return feed
+  }
+
+  // Item commands lookup accountId from feed
+  addItem(item) {
+    item.id = item.id || uuid()
+
+    // Get accountId from feed
+    const feed = this.queries.findFeed(item.feedId)
+    const accountId = feed?.accountId
+
+    // Store in account-specific database
+    this.track(accountId, 'items', item.id, 'create', item)
+    return item
+  }
+
+  // Core tracking with dbId
+  track(dbId, collection, objectId, action, data) {
+    this.state.track(dbId, collection, objectId, action, data)
+  }
+}
+```
+
+**Usage with Queries:**
+
+```javascript
+class Queries {
+  constructor({ state }) {
+    this.state = state  // MultipleEventStore instance
+  }
+
+  // Query accounts from root DB (dbId = undefined)
+  allAccounts() {
+    return this.state.findAll(undefined, 'accounts')
+      .filter(account => !account._deleted)
+      .sort((a, b) => a.name?.localeCompare(b.name))
+  }
+
+  // Query feeds from specific account DB
+  feedsForAccount(account) {
+    return this.state.findAll(account.id, 'feeds')
+      .filter(feed => !feed._deleted && feed.accountId === account.id)
+      .sort((a, b) => a.title?.localeCompare(b.title))
+  }
+
+  // Query items from specific account DB
+  itemsForAccount(account) {
+    return this.state.findAll(account.id, 'items')
+      .filter(item => !item._deleted)
+      .sort((a, b) => (b.pubDate || 0) - (a.pubDate || 0))
+  }
+
+  // Query across all accounts (if needed)
+  allFeeds() {
+    return this.state.findAll(undefined, 'feeds')
+      .filter(feed => !feed._deleted)
+      .sort((a, b) => a.title?.localeCompare(b.title))
+  }
+}
+```
+
+**Benefits of MultipleEventStore:**
+
+- **Data isolation**: Each account's data is in a separate IndexedDB database
+- **Performance**: Queries only scan relevant account data
+- **Privacy**: Account data can be independently encrypted/deleted
+- **Scalability**: Large accounts don't slow down queries for small accounts
+- **Flexibility**: Can query specific account or across all accounts
+- **Browser limits**: Avoids hitting single-database size limits
+
+**When to use:**
+
+- Multi-tenant applications with account-based data isolation
+- Apps where users have multiple workspaces/projects
+- When accounts can have vastly different data sizes
+- When you need to selectively sync/export account data
+
 ---
 
 ## CQRS Implementation
@@ -1071,6 +1289,33 @@ describe('Event Replay', () => {
 3. **Past tense names**: `CheckpointCreated`, not `CreateCheckpoint`
 4. **Fine-grained**: One event per logical change
 5. **Include context**: Timestamp, user ID, version
+
+### Naming Conventions
+
+1. **Boolean properties**: Always use `is`, `has`, or `should` prefix
+   - ✅ `isRead`, `isDeleted`, `isActive`, `isComplete`
+   - ✅ `hasChildren`, `hasPermission`
+   - ✅ `shouldSync`, `shouldNotify`
+   - ❌ `read`, `deleted`, `active`, `complete`
+
+2. **Command methods**: Use imperative present tense
+   - ✅ `addEmail()`, `markEmailAsRead()`, `updateAccount()`
+   - ✅ `removeCheckpoint()`, `completeTask()`
+   - ❌ `emailAdded()`, `readEmail()`, `accountUpdate()`
+
+3. **Query methods**: Use descriptive names
+   - ✅ `allEmails()`, `unreadEmails()`, `findEmail(id)`
+   - ✅ `emailsInFolder(folder)`, `incompleteTasks()`
+   - ❌ `getEmails()`, `emails()`, `email(id)`
+
+4. **Event actions**: Use past tense or descriptive verbs
+   - ✅ `'emails.markRead'`, `'emails.create'`, `'emails.delete'`
+   - ✅ `'checkpoints.updateName'`, `'tasks.complete'`
+   - ❌ `'emails.read'`, `'emails.add'`, `'emails.remove'`
+
+5. **Collections**: Use plural nouns
+   - ✅ `emails`, `folders`, `accounts`
+   - ❌ `email`, `folder`, `account`
 
 ### Command Design
 
