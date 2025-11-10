@@ -448,6 +448,99 @@ export default {
 }
 ```
 
+### Timestamp-Based State Pattern
+
+**Prefer timestamp fields over booleans for state that tracks when something happened.**
+
+Instead of boolean flags like `paused`, `saved`, or `archived`, use timestamp fields that record when the state change occurred. This provides more information and follows event sourcing principles better.
+
+**❌ Bad: Boolean flags**
+
+```javascript
+// Runners
+'feeds.pause'(event) {
+  const feed = this.feeds.find(item => item.id === event.objectId)
+  if (feed) {
+    feed.paused = true
+    feed.updatedAt = event.time
+  }
+}
+
+'feeds.unpause'(event) {
+  const feed = this.feeds.find(item => item.id === event.objectId)
+  if (feed) {
+    feed.paused = false
+    feed.updatedAt = event.time
+  }
+}
+
+// Usage in components
+if (feed.paused) {
+  // Show paused state
+}
+```
+
+**✅ Good: Timestamp fields with dedicated events**
+
+```javascript
+// Runners
+'feeds.pause'(event) {
+  const feed = this.feeds.find(item => item.id === event.objectId)
+  if (feed) {
+    feed.pausedAt = event.time  // Timestamp, not boolean
+    feed.updatedAt = event.time
+  }
+}
+
+'feeds.unpause'(event) {
+  const feed = this.feeds.find(item => item.id === event.objectId)
+  if (feed) {
+    feed.pausedAt = null  // null means not paused
+    feed.updatedAt = event.time
+  }
+}
+
+// Dedicated commands (not generic update)
+pauseFeed(feed) {
+  this.track(feed.accountId, 'feeds', feed.id, 'pause')
+}
+
+unpauseFeed(feed) {
+  this.track(feed.accountId, 'feeds', feed.id, 'unpause')
+}
+
+// Usage in components
+if (feed.pausedAt) {
+  // Show paused state
+  // Can also show when it was paused: formatDate(feed.pausedAt)
+}
+```
+
+**Benefits of timestamp-based state:**
+
+1. **Richer data**: Know exactly when the state changed
+2. **Better audit trail**: Can query "feeds paused in the last week"
+3. **Enables sorting**: Sort by "recently paused" or "longest paused"
+4. **Future extensibility**: Can add features like "paused for 7 days" notifications
+5. **True event sourcing**: Events capture when things happened
+6. **Dedicated events**: Each state transition is explicit
+
+**Common patterns to convert:**
+
+| Boolean Pattern | Timestamp Pattern | Events |
+|----------------|-------------------|---------|
+| `saved: true/false` | `savedAt: timestamp/null` | `items.save`, `items.unsave` |
+| `paused: true/false` | `pausedAt: timestamp/null` | `feeds.pause`, `feeds.unpause` |
+| `archived: true/false` | `archivedAt: timestamp/null` | `items.archive`, `items.unarchive` |
+| `read: true/false` | `readAt: timestamp/null` | `items.markRead`, `items.markUnread` |
+| `completed: true/false` | `completedAt: timestamp/null` | `tasks.complete`, `tasks.uncomplete` |
+
+**When to use booleans vs timestamps:**
+
+- ✅ Use booleans: Static properties that never change (`isSystem`, `hasChildren`)
+- ✅ Use timestamps: State that changes over time and you care when it changed
+- ✅ Use enums: Multiple discrete states (`status: 'draft' | 'published' | 'archived'`)
+
 ### Built-in Runners
 
 The Event Store provides standard runners:
