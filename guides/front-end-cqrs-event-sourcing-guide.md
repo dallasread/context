@@ -1554,88 +1554,594 @@ this.app.commands.addCheckpointToJourney(journey, { name: 'New Checkpoint' })
 // The checkpoint list automatically updates!
 ```
 
+### Component Communication Pattern
+
+**NEVER use emits - always use app methods:**
+
+All component communication should go through methods on the `app` object. Never use Vue's `$emit` or `emits` option.
+
+**Important distinction:**
+- `app` methods are for **UI actions** (open dialog, change filter, switch view)
+- `app.commands` methods are for **business logic** (add feed, update preference, delete item)
+- `app.queries` methods are for **reading data** (get feeds, find item, check status)
+
+**❌ Bad: Using emits**
+
+```vue
+<!-- ChildComponent.vue -->
+<template>
+  <button @click="$emit('open-dialog')">Open</button>
+  <button @click="$emit('close')">Close</button>
+</template>
+
+<script>
+export default {
+  props: ['app'],
+  emits: ['open-dialog', 'close']
+}
+</script>
+
+<!-- ParentComponent.vue -->
+<template>
+  <ChildComponent
+    :app="app"
+    @open-dialog="openDialog"
+    @close="handleClose"
+  />
+</template>
+```
+
+**✅ Good: Calling app methods directly**
+
+```vue
+<!-- ChildComponent.vue -->
+<template>
+  <!-- UI actions on app -->
+  <button @click="app.openDialog()">Open</button>
+  <button @click="app.closeDialog()">Close</button>
+
+  <!-- Business logic on app.commands -->
+  <button @click="app.commands.addFeed(feed)">Add Feed</button>
+  <button @click="app.commands.deleteFeed(feed)">Delete Feed</button>
+</template>
+
+<script>
+export default {
+  props: {
+    app: { type: Object, required: true }
+  }
+}
+</script>
+
+<!-- ParentComponent.vue -->
+<template>
+  <ChildComponent :app="app" />
+</template>
+```
+
+**Registering UI methods on app:**
+
+UI-related methods (opening dialogs, changing views, etc.) should be registered on the app object during mount:
+
+```vue
+<!-- AccountHome.vue -->
+<script>
+export default {
+  props: {
+    app: { type: Object, required: true }
+  },
+  async mounted() {
+    // Register UI methods on app object
+    this.app.openAddTagDialog = this.openAddTagDialog
+    this.app.openAddFeedDialog = this.openAddFeedDialog
+    this.app.openSearchDialog = this.openSearchDialog
+    this.app.changeAuthorFilter = this.changeAuthorFilter
+    this.app.changeContentTypeFilter = this.changeContentTypeFilter
+  },
+  methods: {
+    // UI methods - manipulate view state, refs, router
+    openAddTagDialog(tag = null) {
+      this.$refs.addTagDialog.open(tag)
+    },
+    openAddFeedDialog() {
+      this.$refs.addFeedDialog.open()
+    },
+    openSearchDialog() {
+      this.$refs.searchDialog.open()
+    },
+    changeAuthorFilter(author) {
+      const query = { ...this.$route.query }
+      if (author) {
+        query.author = author
+      } else {
+        delete query.author
+      }
+      this.$router.push({ path: this.$route.path, query })
+    },
+    async changeContentTypeFilter(contentType) {
+      // Business logic goes through commands
+      await this.app.commands.updatePreference(this.account, 'contentFilter', contentType)
+      // UI state update
+      this.preferences = await this.app.queries.getPreferences(this.account)
+    }
+  }
+}
+</script>
+```
+
+**App-level UI methods (defined in root component):**
+
+```vue
+<!-- App.vue -->
+<script>
+export default {
+  methods: {
+    // UI methods - manage component state
+    setMedia(media) {
+      this.currentMedia = media
+    },
+    clearMedia() {
+      this.currentMedia = null
+    },
+    showMediaInline() {
+      if (this.currentMedia && this.currentMedia.itemId) {
+        this.inlineMediaItemId = this.currentMedia.itemId
+        this.currentMedia = null
+      }
+    },
+    async switchAccount(account) {
+      // Update UI state
+      this.currentAccountId = account.id
+
+      // Business logic goes through commands
+      this.commands.setCurrentAccountId(account.id)
+
+      // UI actions - theme and navigation
+      const preferences = await this.queries.getPreferences(account)
+      const theme = preferences.theme || getDefaultTheme()
+      applyTheme(theme)
+
+      await this.$nextTick()
+      this.$router.push('/')
+    }
+  }
+}
+</script>
+```
+
+**Deep child components:**
+
+```vue
+<!-- MediaPlayer.vue -->
+<template>
+  <div>
+    <!-- UI actions -->
+    <button @click="app.clearMedia()">Close</button>
+    <button @click="app.showMediaInline()">Show Inline</button>
+  </div>
+</template>
+
+<!-- FeedItem.vue -->
+<template>
+  <div>
+    <!-- Business logic commands -->
+    <button @click="app.commands.saveItem(item)">Save</button>
+    <button @click="app.commands.deleteItem(item)">Delete</button>
+
+    <!-- UI action -->
+    <button @click="app.setMedia(mediaInfo)">Play</button>
+  </div>
+</template>
+```
+
+**Three layers of methods:**
+
+```javascript
+// 1. UI methods (app)
+app.openDialog()           // Open modal
+app.closeDialog()          // Close modal
+app.switchAccount()        // Switch view to different account
+app.setMedia()             // Update media player state
+app.changeAuthorFilter()   // Update URL query params
+
+// 2. Business logic (app.commands)
+app.commands.addFeed()          // Create feed event
+app.commands.deleteFeed()       // Delete feed event
+app.commands.updatePreference() // Update preference in config
+app.commands.saveItem()         // Track save event
+
+// 3. Data queries (app.queries)
+app.queries.allFeeds()          // Get all feeds
+app.queries.findFeed()          // Find specific feed
+app.queries.feedsForAccount()   // Get feeds for account
+```
+
+**Benefits of this pattern:**
+
+1. **No emits needed**: Remove all $emit and emits declarations
+2. **Clear separation**: UI vs business logic is explicit
+3. **Explicit data flow**: Easy to trace where actions come from
+4. **No event handler boilerplate**: Remove all @event="handler" from templates
+5. **Better debugging**: Call stack shows direct method calls
+6. **Single source of truth**: All actions defined on app object
+
 ---
 
 ## Testing Strategy
 
-### Integration Testing with Events
+### Behavioral Testing Philosophy
+
+**Test what users do and what they see, not internal implementation.**
+
+The key principles:
+1. **Always mount the full App** - Never test commands/queries in isolation
+2. **Interact like a user** - Click, fill, submit through the DOM
+3. **Assert on visible state** - Check what's displayed, not internal queries
+4. **Test the job to be done** - Focus on user goals, not technical operations
+
+### Test Structure
 
 ```javascript
-// use-cases/journeys/begin-a-journey.spec.js
+// tests/use-cases/feeds/subscribe-to-feed.spec.js
 import { mountApp, story, event } from '../helper.js'
 
-describe('Journeys: Begin a journey', () => {
+describe('Feeds: User subscribes to a feed', () => {
   let app
 
   beforeEach(async () => {
-    // Mount full app (not a unit test)
+    // 1. Mount the full app
     app = await mountApp()
 
-    // Simulate user actions
-    await app.click('[aria-label="Start a journey"]')
-    await app.find('[aria-label="Journey name"]').setValue('My Journey')
-    await app.click('[aria-label="Journey color #A2E8F1"]')
-    await app.submit('[aria-label="Start journey"]')
+    // 2. Setup: Create prerequisites (if needed)
+    await app.click('[aria-label="Create Account"]')
+    await app.fill('input[placeholder="Personal"]', 'Personal')
+    await app.submit('form')
+
+    // 3. User performs the main action
+    await app.click('[aria-label="Add Feed"]')
+    await app.fill('input[name="feedUrl"]', 'https://example.com/feed.xml')
+    await app.fill('input[name="feedTitle"]', 'Example Feed')
+    await app.submit('form')
   })
 
-  // Test user story
-  story('begins the journey', () => {
-    expect(app.text()).toContain('My Journey')
-    expect(app.text()).toContain('Start a journey') // First checkpoint
+  // 4. Assert on what user sees (not internal state)
+  story('user sees the feed title displayed', () => {
+    expect(app.hasText('Example Feed')).toBe(true)
   })
 
-  // Test that correct events were emitted
-  event('journeys.create', {
-    collection: 'journeys',
-    action: 'create',
+  // 5. Verify correct event was emitted (domain validation)
+  event('feeds.create', {
     data: {
-      name: 'My Journey',
-      color: '#A2E8F1'
-    }
-  }, () => ({ app }))
-
-  event('checkpoints.create', {
-    collection: 'checkpoints',
-    action: 'create',
-    data: {
-      name: 'Start a journey',
-      order: 0
+      url: 'https://example.com/feed.xml',
+      title: 'Example Feed'
     }
   }, () => ({ app }))
 })
 ```
 
-### Testing Helpers
+### Testing Helper Implementation
 
 ```javascript
-// use-cases/helper.js
+// tests/use-cases/helper.js
 import { mount } from '@vue/test-utils'
-import App from '@/app/component.vue'
+import App from '../../src/App.vue'
 
+/**
+ * Mount the full App component for behavioral testing
+ * Returns an enhanced wrapper with helper methods
+ */
 export async function mountApp() {
-  const wrapper = mount(App)
-  await wrapper.vm.commands.restoreFromLocal()
-  return wrapper
+  const wrapper = mount(App, {
+    global: {
+      stubs: {
+        'router-view': false
+      }
+    }
+  })
+
+  // Wait for app to finish loading
+  await wrapper.vm.$nextTick()
+  while (wrapper.vm.isLoading) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+    await wrapper.vm.$nextTick()
+  }
+
+  // Return enhanced wrapper with user-friendly methods
+  return {
+    wrapper,
+    vm: wrapper.vm,
+
+    // Find element by selector
+    find(selector) {
+      return wrapper.find(selector)
+    },
+
+    // Find element by text content
+    findByText(text) {
+      return wrapper.findAll('*').filter(w => w.text().includes(text))[0]
+    },
+
+    // Click an element and wait for nextTick
+    async click(selector) {
+      const element = wrapper.find(selector)
+      await element.trigger('click')
+      await wrapper.vm.$nextTick()
+    },
+
+    // Fill in an input field and wait for nextTick
+    async fill(selector, value) {
+      const element = wrapper.find(selector)
+      await element.setValue(value)
+      await wrapper.vm.$nextTick()
+    },
+
+    // Submit a form and wait for nextTick
+    async submit(selector) {
+      const form = wrapper.find(selector)
+      await form.trigger('submit')
+      await wrapper.vm.$nextTick()
+    },
+
+    // Get text content
+    text() {
+      return wrapper.text()
+    },
+
+    // Check if text exists (for assertions)
+    hasText(text) {
+      return wrapper.text().includes(text)
+    },
+
+    // Access queries (only when absolutely necessary)
+    get queries() {
+      return wrapper.vm.queries
+    },
+
+    // Access commands (only for test setup)
+    get commands() {
+      return wrapper.vm.commands
+    },
+
+    // Access state (only for event verification)
+    get state() {
+      return wrapper.vm.commands.state
+    }
+  }
 }
 
+/**
+ * Story helper - describes user stories
+ */
 export function story(description, testFn) {
-  it(description, testFn)
+  return it(description, testFn)
 }
 
+/**
+ * Event helper - verifies domain events were emitted
+ */
 export function event(eventKey, expectedEvent, getContext) {
-  it(`emits ${eventKey} event`, () => {
+  it(`emits ${eventKey} event`, async () => {
     const { app } = getContext()
-    const events = app.vm.state.findAllEvents()
+    const events = await app.state.findAllEvents()
 
+    const [collection, action] = eventKey.split('.')
     const matchingEvent = events.find(e => {
-      return e.collection === expectedEvent.collection &&
-             e.action === expectedEvent.action
+      return e.collection === collection &&
+             e.action === action
     })
 
     expect(matchingEvent).toBeDefined()
-    expect(matchingEvent.data).toMatchObject(expectedEvent.data)
+    if (expectedEvent.data !== undefined) {
+      expect(matchingEvent.data).toMatchObject(expectedEvent.data)
+    }
+    if (expectedEvent.objectId !== undefined) {
+      expect(matchingEvent.objectId).toBe(expectedEvent.objectId)
+    }
   })
 }
+```
+
+### Behavioral Testing Patterns
+
+#### ❌ Bad: Testing Commands Directly
+
+```javascript
+// Don't do this - this is a unit test, not a behavioral test
+describe('Commands: addFeed', () => {
+  it('creates a feed', () => {
+    const feed = commands.addFeed({
+      accountId: 'account-123',
+      url: 'https://example.com/feed.xml',
+      title: 'Example Feed'
+    })
+
+    expect(feed.id).toBeDefined()
+    expect(feed.title).toBe('Example Feed')
+  })
+})
+```
+
+#### ✅ Good: Testing User Behavior
+
+```javascript
+// Test what the user does and sees
+describe('Feeds: User subscribes to a feed', () => {
+  let app
+
+  beforeEach(async () => {
+    app = await mountApp()
+
+    // User creates account
+    await app.click('[aria-label="Create Account"]')
+    await app.fill('input[placeholder="Personal"]', 'Personal')
+    await app.submit('form')
+
+    // User subscribes to feed
+    await app.click('[aria-label="Add Feed"]')
+    await app.fill('input[name="feedUrl"]', 'https://example.com/feed.xml')
+    await app.fill('input[name="feedTitle"]', 'Example Feed')
+    await app.submit('form')
+  })
+
+  story('user sees the feed title displayed', () => {
+    expect(app.hasText('Example Feed')).toBe(true)
+  })
+})
+```
+
+#### ❌ Bad: Asserting on Internal State
+
+```javascript
+story('feed is added to the list', () => {
+  // Don't check internal state
+  const feeds = app.queries.feedsForAccount(account)
+  expect(feeds).toHaveLength(1)
+  expect(feeds[0].title).toBe('Example Feed')
+})
+```
+
+#### ✅ Good: Asserting on Visible UI
+
+```javascript
+story('user sees the feed in their list', () => {
+  // Check what's actually displayed
+  expect(app.hasText('Example Feed')).toBe(true)
+})
+
+story('feed URL is shown correctly', async () => {
+  // Open feed details to check URL
+  await app.click('[aria-label="Feed Actions"]')
+  await app.click('[aria-label="Edit Feed"]')
+
+  const urlInput = app.find('input[name="feedUrl"]')
+  expect(urlInput.element.value).toBe('https://example.com/feed.xml')
+})
+```
+
+### Test Setup Patterns
+
+When tests need data to exist before the main action:
+
+```javascript
+describe('Feeds: User pauses a feed', () => {
+  let app
+
+  beforeEach(async () => {
+    app = await mountApp()
+
+    // Setup: Create account and feed through UI
+    await app.click('[aria-label="Create Account"]')
+    await app.fill('input[placeholder="Personal"]', 'Personal')
+    await app.submit('form')
+
+    await app.click('[aria-label="Add Feed"]')
+    await app.fill('input[name="feedUrl"]', 'https://example.com/feed.xml')
+    await app.fill('input[name="feedTitle"]', 'Example Feed')
+    await app.submit('form')
+
+    // User action being tested
+    await app.click('[aria-label="Feed Actions"]')
+    await app.click('[aria-label="Pause Feed"]')
+  })
+
+  story('feed shows paused indicator', () => {
+    expect(app.hasText('Paused')).toBe(true)
+  })
+})
+```
+
+For items that come from feed fetches (not user-created), you can inject data via commands:
+
+```javascript
+describe('Items: User saves an item', () => {
+  let app
+
+  beforeEach(async () => {
+    app = await mountApp()
+
+    // Create account and feed through UI
+    await app.click('[aria-label="Create Account"]')
+    await app.fill('input[placeholder="Personal"]', 'Personal')
+    await app.submit('form')
+
+    await app.click('[aria-label="Add Feed"]')
+    await app.fill('input[name="feedUrl"]', 'https://example.com/feed.xml')
+    await app.fill('input[name="feedTitle"]', 'Example Feed')
+    await app.submit('form')
+
+    // Inject item (simulating feed fetch)
+    await app.commands.addItem({
+      feedId: app.queries.allFeeds()[0].id,
+      title: 'Interesting Article',
+      link: 'https://example.com/article',
+      content: 'Article content here',
+      pubDate: Date.now()
+    })
+
+    // User action being tested
+    await app.click('[aria-label="Save Item"]')
+  })
+
+  story('item shows saved indicator', () => {
+    expect(app.hasText('Saved')).toBe(true)
+  })
+
+  story('user can find item in saved list', async () => {
+    await app.click('[aria-label="Saved Items"]')
+    expect(app.hasText('Interesting Article')).toBe(true)
+  })
+})
+```
+
+### Unit Tests for Adapters
+
+While use case tests are behavioral, adapter unit tests are appropriate:
+
+```javascript
+// tests/unit/adapters/browser-http-adapter.spec.js
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals'
+import { BrowserHttpAdapter } from '../../../src/adapters/http/browser-adapter.js'
+
+describe('BrowserHttpAdapter', () => {
+  let adapter
+  let originalFetch
+
+  beforeEach(() => {
+    adapter = new BrowserHttpAdapter()
+    originalFetch = global.fetch
+  })
+
+  afterEach(() => {
+    global.fetch = originalFetch
+  })
+
+  it('fetches content through CORS proxy', async () => {
+    const mockResponse = {
+      ok: true,
+      text: async () => '<rss>feed content</rss>'
+    }
+
+    global.fetch = jest.fn().mockResolvedValue(mockResponse)
+
+    const result = await adapter.fetch('https://example.com/feed.xml')
+
+    expect(global.fetch).toHaveBeenCalledWith('https://cors-anywhere.followalong.com/https://example.com/feed.xml')
+    expect(result).toBe('<rss>feed content</rss>')
+  })
+
+  it('throws error on HTTP failure', async () => {
+    const mockResponse = {
+      ok: false,
+      status: 404,
+      statusText: 'Not Found'
+    }
+
+    global.fetch = jest.fn().mockResolvedValue(mockResponse)
+
+    await expect(adapter.fetch('https://example.com/feed.xml'))
+      .rejects.toThrow('HTTP 404: Not Found')
+  })
+})
 ```
 
 ### Event Replay Testing
@@ -1645,31 +2151,74 @@ Test event replay to ensure deterministic state:
 ```javascript
 describe('Event Replay', () => {
   it('reconstructs state from events', async () => {
-    // Create initial state
-    const journey = await commands.addJourney({ name: 'Test' })
-    await commands.addCheckpointToJourney(journey, { name: 'Checkpoint 1' })
-    await commands.addCheckpointToJourney(journey, { name: 'Checkpoint 2' })
+    const app = await mountApp()
+
+    // User creates account and feed
+    await app.click('[aria-label="Create Account"]')
+    await app.fill('input[placeholder="Personal"]', 'Personal')
+    await app.submit('form')
+
+    await app.click('[aria-label="Add Feed"]')
+    await app.fill('input[name="feedUrl"]', 'https://example.com/feed.xml')
+    await app.fill('input[name="feedTitle"]', 'Example Feed')
+    await app.submit('form')
 
     // Capture events
-    const events = queries.findAllEventsForJourney(journey)
+    const events = await app.state.findAllEvents()
 
     // Clear state
-    await state.clear()
+    await app.state.reset()
 
     // Replay events
-    events.forEach(event => state._runEvent(event))
+    for (const event of events) {
+      app.state._runEvent(event)
+    }
 
     // State should be identical
-    const restoredJourney = queries.findJourney(journey.id)
-    expect(restoredJourney.name).toBe('Test')
-
-    const checkpoints = queries.findAllCheckpointsForJourney(restoredJourney)
-    expect(checkpoints).toHaveLength(2)
-    expect(checkpoints[0].name).toBe('Checkpoint 1')
-    expect(checkpoints[1].name).toBe('Checkpoint 2')
+    expect(app.hasText('Personal')).toBe(true)
+    expect(app.hasText('Example Feed')).toBe(true)
   })
 })
 ```
+
+### When to Access Internal State
+
+Only access `app.queries` or `app.commands` in tests when:
+
+1. **Test setup**: Injecting data that wouldn't come from user actions
+   ```javascript
+   // OK: Simulating feed fetch (not a user action)
+   await app.commands.addItem({ feedId, title, content })
+   ```
+
+2. **Event verification**: Checking domain events were emitted
+   ```javascript
+   // OK: Verifying the domain event
+   const events = await app.state.findAllEvents()
+   expect(events.find(e => e.action === 'create')).toBeDefined()
+   ```
+
+3. **Getting IDs for further actions**: When you need to reference created entities
+   ```javascript
+   // Sometimes OK, but prefer DOM interactions when possible
+   const feedId = app.queries.allFeeds()[0].id
+   ```
+
+**Never** use queries/commands for:
+- Asserting on what the user sees
+- Checking if something worked
+- Verifying the test passed
+
+### Best Practices
+
+1. **One user action per test suite**: Each `describe` block tests one user goal
+2. **Setup in beforeEach**: Create prerequisites, then perform the action being tested
+3. **Multiple stories per action**: Test different aspects of what the user sees
+4. **Clear comments**: Label setup vs. action being tested
+5. **Selector strategy**: Use `aria-label`, `data-*`, or `name` attributes (not class names)
+6. **Avoid brittle selectors**: Don't rely on DOM structure or CSS classes
+7. **Test user journeys**: Multiple related actions in one test
+8. **Always use async/await**: All interactions are asynchronous
 
 ---
 
