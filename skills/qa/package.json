@@ -1,0 +1,9 @@
+{
+  "name": "qa",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Authenticated Playwright screenshots for Claude Code skills",
+    "dependencies": {
+    "playwright": "^1.50.0"
+  }
+}
