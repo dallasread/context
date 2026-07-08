@@ -1,6 +1,6 @@
 ---
 name: pr-dry
-description: Dry-run a pull request. Run the review-dry skill over the branch (four lenses + mandatory live QA), then draft the PR title and description from the repo's PR template — taking over its QA section with the review/qa evidence block (a 👓 QA section), plus the deploy sections — for the user to review. Nothing is created, pushed, or uploaded until explicitly asked. Use when asked to prep or dry-run a PR.
+description: Dry-run a pull request. Run the review-dry skill over the branch (four lenses + mandatory live QA), then draft the PR title and description from the repo's PR template — taking over its QA section with the review/qa evidence block plus a manual-verification walkthrough below the video (a 👓 QA section), and the deploy sections — for the user to review. Nothing is created, pushed, or uploaded until explicitly asked. Use when asked to prep or dry-run a PR.
 ---
 
 # pr-dry
@@ -17,7 +17,11 @@ Produce a ready-to-ship PR draft the user can read before anything touches GitHu
 
 ## Description sections
 
-- **👓 QA** — the review/qa evidence block takes over the PR template's QA section. When the template has a QA section, replace it wholesale — heading and body both — with this block; when the template has no QA section, add this one (whenever the change has a visible surface; omit entirely for pure backend/refactor/docs). Either way the section is `## 👓 QA` and its body is the review-dry QA block verbatim: the SAME canonical template, rendered by the **review-dry** skill's formatter from the evidence dir the review-dry run produced (or a direct util-qa run), asking it for the `## 👓 QA` heading (video style by default — count line, ✅/⚠️ checkpoint checklist, video, collapsed script; frame-by-frame only when the user asks). Never hand-written, and nothing is appended — no "Specs cover…" line, no manual walkthrough — so a PR's QA section and a review comment's QA block read identically. In the dry draft, render with local evidence paths. When the user asks to actually create the PR, publish the evidence with the **util-gh-upload** skill (create the PR first so there's a page to attach to), re-render with the hosted URLs, and follow its consent rule.
+- **👓 QA** — the review/qa evidence block takes over the PR template's QA section. When the template has a QA section, replace it wholesale — heading and body both — with this section; when the template has no QA section, add this one (whenever the change has a visible surface; omit entirely for pure backend/refactor/docs). The section is `## 👓 QA`, and it has two parts:
+  - **The evidence block, on top** — the review-dry QA block verbatim: the SAME canonical template, rendered by the **review-dry** skill's formatter from the evidence dir the review-dry run produced (or a direct util-qa run), asking it for the `## 👓 QA` heading (video style by default — count line, ✅/⚠️ checkpoint checklist, video, collapsed script; frame-by-frame only when the user asks). Never hand-written, so it reads identically to a review comment's QA block.
+  - **A manual-verification walkthrough, below the video** — a lead line naming the start command (check the README, e.g. `bin/dev`) and the local base URL, then one bullet per page giving its local URL and what to check there by hand. Name any residual gap the run could not cover (sandbox-only flows, request-spec-only coverage) here too.
+
+  In the dry draft, render the evidence block with local evidence paths. When the user asks to actually create the PR, publish the evidence with the **util-gh-upload** skill (create the PR first so there's a page to attach to), re-render the block with the hosted URLs, and follow its consent rule.
 - **Verification** — remote URLs, with the two deploy checkboxes:
   - [ ] sandbox: Verify a successful deploy
   - [ ] production: Verify a successful deploy
