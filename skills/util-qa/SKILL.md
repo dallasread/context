@@ -50,7 +50,7 @@ Scripted browser QA with video evidence. You (Claude) derive a scenario from the
 
 5. **Review the evidence yourself — thoroughly, and record what you find.** Read the frame PNGs and check the UI actually looks right — assertions prove presence, not layout. A passing run with a broken-looking frame is a FAIL; say so. Look beyond what the assertions covered for bugs and inconsistencies: misaligned or overflowing layout, wrong/placeholder copy, stale or duplicated data, an off-by-one count, a control that should be disabled but isn't. If the caller passed review questions (see step 1), re-ask the observable ones of each frame — awkward long-data rendering, a lost form value, a missing CTA, unclear next steps are all findings. **Write every defect you spot into `<evidence-dir>/findings.json`** (schema below) — that file, not prose in your reply, is QA's structured list of issues. The failed checkpoint is already a finding automatically; `findings.json` is for the things no assertion caught.
 
-6. **Report**: verdict, what was exercised, the issues found, the evidence dir, the video path, and any frames showing problems. QA stops at evidence — it does **not** format or post a PR comment. Hand the evidence dir (`findings.json`, `verdict`, `steps.json`, `qa.mp4`, `frames/`) to the caller; assembling the PR comment is the **review-dry skill's** job (`~/.claude/skills/review-dry/`), and uploading evidence is the **gh-upload skill's** (`~/.claude/skills/util-gh-upload/`). When run standalone (not under `/review-dry`), just report the verdict and paths and let the user decide what to do with them.
+6. **Report**: verdict, what was exercised, the issues found, the evidence dir, the video path, and any frames showing problems. QA stops at evidence — it does **not** format or post a PR comment. Hand the evidence dir (`findings.json`, `verdict`, `steps.json`, `qa.mp4`, `frames/`) to the caller; assembling the PR comment is the **review-dry** skill's job, and uploading evidence is the **util-gh-upload** skill's. When run standalone (not under `/review-dry`), just report the verdict and paths and let the user decide what to do with them.
 
 ## Findings — what QA is allowed to claim
 
@@ -69,7 +69,7 @@ Findings live in `<evidence-dir>/findings.json`, an array the reviewing agent au
 - `frame` — the frame basename that shows it (from `frames/`). This is the evidence; include it.
 - `forReview` *(optional)* — a lead handed to the review-dry skill (a suspected code cause). This is the ONE sanctioned place to record a code suspicion, and it is deliberately kept OUT of the posted QA comment — it exists so a reviewer can chase it, not so QA can claim it. The review skill's formatter never renders it.
 
-`findings.json` is QA's whole output contract for issues: an array of observations, each backed by a frame. The review skill merges these with the run's automatic assertion-failure finding into its comment's tagged, prioritized **Top points** (`[QA · <severity>]`, each linking its screenshot — the review formatter's `--list-frames` includes every frame a finding cites so those links work). How that list is rendered and posted lives with the review-dry skill, not here.
+`findings.json` is QA's whole output contract for issues: an array of observations, each backed by a frame. How the caller surfaces them — merged with the run's automatic assertion-failure finding, prioritized, linked to their screenshots — is the caller's business, not QA's.
 
 ## Scenario format
 
@@ -131,7 +131,7 @@ Use `--no-auth` for logged-out flows (login page, marketing pages). Never fabric
 
 ## Posting evidence to GitHub
 
-Not QA's job. Formatting the evidence into a PR comment lives in the **review-dry skill** (`~/.claude/skills/review-dry/`, which owns `format.js` and the comment template); uploading lives in the **util-gh-upload skill** (`~/.claude/skills/util-gh-upload/`, which owns `post.js`, the browser profile, and the consent rule). QA produces the evidence dir and stops; `/review-dry` picks it up from there. If you are running QA standalone and want to post, follow those two skills — and, as always, ask the user before uploading or posting, every single time.
+Not QA's job. Formatting the evidence into a PR comment is the **review-dry** skill's job; uploading it is the **util-gh-upload** skill's. QA produces the evidence dir and stops; `/review-dry` picks it up from there. If you are running QA standalone and want to post, follow those two skills — and, as always, ask the user before uploading or posting, every single time.
 
 ## Booting any repo
 

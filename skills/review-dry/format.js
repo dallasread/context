@@ -23,12 +23,15 @@
 // (b) opening its <details>, and (c) a ⚠️ glyph (emoji carry their own color).
 // The table is raw HTML because markdown pipe tables cannot nest <details>.
 //
-//   node format.js <evidence-dir> [--frames] [--assets map.json] [--video <url>] [--scenario <path>]
+//   node format.js <evidence-dir> [--frames] [--heading <md>] [--assets map.json] [--video <url>] [--scenario <path>]
 //   node format.js <evidence-dir> [--frames] --list-frames   # print frames to upload, then exit
 //
 // --list-frames matches the style: video mode names only the failing frame +
 // finding frames (nothing else is embedded or linked); --frames adds every
 // table row's frame.
+//
+// --heading replaces the default "### 👓 QA" heading line — pr-dry renders a
+// PR description's "## 👓 Preview" section from the same evidence this way.
 //
 // --assets map.json: { "02-see.png": "https://github.com/user-attachments/assets/…", … }
 //   keyed by frame basename. A missing entry renders that row without an image.
@@ -147,10 +150,10 @@ function renderRow({ num, ok, caption, url, detail }) {
 
 // Assemble the "### 👓 QA" block markdown.
 // @param {object} manifest parsed steps.json
-// @param {object} opts { assets, video, scenario, frames }
+// @param {object} opts { assets, video, scenario, frames, heading }
 // @return {string} comment markdown ending in a single newline
 function build(manifest, opts) {
-  const { assets = {}, video, scenario, frames = false } = opts;
+  const { assets = {}, video, scenario, frames = false, heading = '### 👓 QA' } = opts;
   const { primary, failing, hasCheckpoints } = selectRows(manifest);
   const K = primary.length;
   const passed = primary.filter((s) => s.ok !== false).length;
@@ -172,7 +175,7 @@ function build(manifest, opts) {
     detail: s.ok === false && s.error ? `<code>${esc(s.error)}</code>` : '',
   }));
 
-  const out = ['### 👓 QA', ''];
+  const out = [heading, ''];
   if (!failing) {
     out.push(`**${passed} / ${K} ${unit} passed.** Expand any row to see its screenshot.`);
   } else if (numOf.has(failing)) {
@@ -230,6 +233,7 @@ function main() {
       video: { type: 'string' },
       scenario: { type: 'string' },
       frames: { type: 'boolean', default: false },
+      heading: { type: 'string' },
       'list-frames': { type: 'boolean', default: false },
     },
     allowPositionals: true,
@@ -237,7 +241,7 @@ function main() {
   });
   const dir = positionals[0];
   if (!dir) {
-    console.error('Usage: format.js <evidence-dir> [--frames] [--assets map.json] [--video <url>] [--scenario <path>] [--list-frames]');
+    console.error('Usage: format.js <evidence-dir> [--frames] [--heading <md>] [--assets map.json] [--video <url>] [--scenario <path>] [--list-frames]');
     process.exit(1);
   }
   const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'steps.json'), 'utf8'));
@@ -249,7 +253,7 @@ function main() {
 
   const assets = values.assets ? JSON.parse(fs.readFileSync(values.assets, 'utf8')) : {};
   const scenario = values.scenario ? fs.readFileSync(values.scenario, 'utf8') : null;
-  const md = build(manifest, { assets, video: values.video, scenario, frames: values.frames });
+  const md = build(manifest, { assets, video: values.video, scenario, frames: values.frames, heading: values.heading });
   const outPath = path.join(dir, 'comment.md');
   fs.writeFileSync(outPath, md);
   console.log(outPath);

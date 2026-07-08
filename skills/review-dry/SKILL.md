@@ -13,7 +13,7 @@ Full-template pull request review with live QA evidence. You (Claude) check out 
 
 2. **Review the diff through the four lenses** (General, Development, UI and UX, Marketing — see below) and output those sections in chat. They are the user's working view of the review and are never pasted into the drafted comment. **Never run linters or the test suite during a review** — CI owns those. Answer "are tests complete and passing?" by reading the specs in the diff and the PR's CI status (`gh pr checks`), not by executing anything locally.
 
-3. **Run live QA — mandatory, via a subagent running the util-qa skill** (`~/.claude/skills/util-qa/SKILL.md`). **You own defining what QA must prove; qa owns driving the app.** You have already read the diff — do not make the subagent re-derive it. Author a **QA brief** in the subagent's prompt containing: (a) each observable behavior the change claims, as a plain-language checkpoint to prove; (b) the negative/regression assertions to include (what must NOT happen, stated as the positive end-state to assert); (c) the pages/routes involved and any useful selectors you saw in the diff; (d) whether this is refactoring work — if so qa proves equivalence against the baseline, so name the baseline ref (e.g. `origin/main`) rather than leaving it to investigate; (e) the observable lens questions (UI and UX, Marketing, below) as its frame-review checklist. Do NOT dictate qa's mechanics (worktree prep, boot, auth, step syntax) — the skill owns those. "The tests pass" / "the rendered HTML looks right" is NOT a substitute; the ONLY acceptable reason to skip is that the app genuinely cannot be booted here, and then you MUST say so explicitly and state what you did instead.
+3. **Run live QA — mandatory, via a subagent running the util-qa skill.** **You own defining what QA must prove; qa owns driving the app.** You have already read the diff — do not make the subagent re-derive it. Author a **QA brief** in the subagent's prompt containing: (a) each observable behavior the change claims, as a plain-language checkpoint to prove; (b) the negative/regression assertions to include (what must NOT happen, stated as the positive end-state to assert); (c) the pages/routes involved and any useful selectors you saw in the diff; (d) whether this is refactoring work — if so qa proves equivalence against the baseline, so name the baseline ref (e.g. `origin/main`) rather than leaving it to investigate; (e) the observable lens questions (UI and UX, Marketing, below) as its frame-review checklist. Do NOT dictate the util-qa skill's mechanics — it owns the how. "The tests pass" / "the rendered HTML looks right" is NOT a substitute; the ONLY acceptable reason to skip is that the app genuinely cannot be booted here, and then you MUST say so explicitly and state what you did instead.
 
 4. **Keep QA findings and code findings in separate, labelled buckets** (see Findings and provenance below), and chase any `forReview` leads QA handed you as part of your code review.
 
@@ -114,7 +114,7 @@ Rules:
 
 - **The lead** is one line: a verdict ("Requesting changes" / "Looks good" / "Comment"), the tally, and `verified against <sha>` linking the commit (`git rev-parse --short HEAD`). Always include the sha — a pasted comment freezes while the PR moves on, so a reader must know which tree the evidence covers.
 - **Top points** is the single merged, prioritized list — max four, ELI5. Every point carries a provenance tag: `[QA · <severity>]` for frame-backed observations (from `findings.json` and failed checkpoints), `[code · <severity>]` for diff findings (with `file:line`). Severities: blocker | major | minor | nit. Every `findings.json` entry and every failed checkpoint must surface here; if more than four points survive triage, the four most severe go in, the tally says so, and the rest stay in the chat review. The refactor suggestion, when it clears the bar, takes a `[code · nit]` slot.
-- **👓 QA** is `format.js` output, untouched, in one of two styles. **Video (the default):** count line, a terse ✅/⚠️ checkpoint checklist, the failing checkpoint's frame embedded only when there is one, the video inline, the QA script collapsed. **Frame-by-frame (`--frames`):** the checkpoint table (failing rows first, `<details open>`, ⚠️) with the collapsed 🎬 Video & QA script block — this is the style the approved mock shows. Use `--frames` only when the user asks for a frame-by-frame review; never hand-edit either form.
+- **👓 QA** is `format.js` output, untouched, in one of two styles. **Video (the default):** count line, a terse ✅/⚠️ checkpoint checklist, the failing checkpoint's frame embedded only when there is one, the video inline, the QA script collapsed. **Frame-by-frame (`--frames`):** the checkpoint table (failing rows first, `<details open>`, ⚠️) with the collapsed 🎬 Video & QA script block — this is the style the approved mock shows. Use `--frames` only when the user asks for a frame-by-frame review; never hand-edit either form. The formatter also serves other surfaces: `--heading` swaps the heading line, which is how pr-dry renders a PR description's `## 👓 Preview` section from the same evidence.
 - **If QA was skipped** (the app genuinely could not boot — the only sanctioned reason), the `### 👓 QA` section instead contains one paragraph saying so and what you did instead. It is never silently omitted, and no `[QA · …]` tags may appear in Top points.
 - Never blur provenance: a QA symptom is not a proven code cause, and a code-read finding is not a QA observation.
 
@@ -128,7 +128,7 @@ QA is a pure evidence producer — it hands you an evidence dir (`findings.json`
 
 ## Posting — only after the user reads the draft and asks
 
-Only then does the upload/post flow run. This skill's `format.js` renders the 👓 QA block with live asset URLs; the actual uploading belongs to the **util-gh-upload skill** (`~/.claude/skills/util-gh-upload/SKILL.md`), which owns the browser profile, the consent rule (uploading publishes — confirm every time), and the failure fallbacks. Follow its instructions for login and upload.
+Only then does the upload/post flow run. This skill's `format.js` renders the 👓 QA block with live asset URLs; the actual uploading belongs to the **util-gh-upload** skill — follow its instructions and its consent rule.
 
 ```
 # 1. list the frames the comment needs (always includes every frame a
@@ -137,9 +137,8 @@ Only then does the upload/post flow run. This skill's `format.js` renders the �
 #    Use the SAME --frames flag here as in step 3, or uploads and links drift.
 node ~/.claude/skills/review-dry/format.js <qa-dir> --list-frames > /tmp/frames.txt
 
-# 2. upload frames + video per the util-gh-upload skill (confirm first, every time):
-#    node ~/.claude/skills/util-gh-upload/post.js $(cat /tmp/frames.txt) <qa-dir>/qa.mp4 \
-#         --repo <owner/repo> --pr <N> --json > <qa-dir>/assets.json
+# 2. upload frames + video per the util-gh-upload skill (its SKILL.md has the
+#    command; confirm first, every time) -> <qa-dir>/assets.json
 
 # 3. render the 👓 QA block (--scenario embeds the repro script)
 node ~/.claude/skills/review-dry/format.js <qa-dir> \

@@ -13,3 +13,13 @@ Engage critically with my ideas, questioning assumptions, identifying biases, an
 Every step must deliver a working product. Break work into vertical slices where each slice is functional, not horizontal layers that only work when complete.
 
 If I ask you to make a ticket, check .github/ISSUE_TEMPLATE.
+
+## Skill Making
+
+My workflows live as skills in ~/.claude/skills; a command (~/.claude/commands) is only for a trivial prompt macro with no tooling.
+
+- Two tiers: entry-point skills I invoke (review-dry, pr-dry, pickup) and util-* skills that exist to serve them (util-qa, util-gh-upload). Name helpers util-*.
+- One owner per capability. Exactly one skill knows how to do a thing (only util-gh-upload uploads, only review-dry formats the QA comment); everyone else defers to it.
+- Encapsulation: a skill references other skills by name only, never by path into their directories. It may state another skill's contract (what you hand it, what it hands back) but never its internals: tools, flags, file names, comment structure, install mechanics. Each detail is documented in exactly one owning skill.
+- *-dry skills end at a draft I can read. Nothing is posted, created, pushed, or uploaded until I read the draft and explicitly ask; uploads confirm again at the moment of publishing.
+- Skill tooling gets tests like any code (TDD), and skills are private by default: publishing one requires whitelisting it in ~/.claude/.gitignore (roundtable is never published).

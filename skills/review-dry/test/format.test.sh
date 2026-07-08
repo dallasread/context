@@ -130,6 +130,13 @@ chk "pass run: checklist only"           "! has '$PCMT' '<table>'"
 chk "pass run: no warning glyph"         "! has '$PCMT' '⚠️'"
 chk "pass run: no video/script blocks"   "! has '$PCMT' '📜'"
 
+# --- custom heading (--heading, for pr-dry's Preview section) ---------------
+node "$FMT" "$PRUN" --heading '## 👓 Preview' >/dev/null 2>&1
+chk "heading: custom heading used"       "has '$PCMT' '## 👓 Preview'"
+chk "heading: default heading absent"    "! has '$PCMT' '### 👓 QA'"
+node "$FMT" "$PRUN" --frames --heading '## 👓 Preview' >/dev/null 2>&1
+chk "heading: works with --frames too"   "has '$PCMT' '## 👓 Preview'"
+
 # --- escaping: caption with HTML metacharacters (video checklist) -----------
 XRUN="$TMP/xrun"; mkdir -p "$XRUN"
 cat > "$XRUN/steps.json" <<'EOF'
