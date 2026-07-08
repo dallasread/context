@@ -415,6 +415,8 @@ function parseMarkdownScenario(text, config = {}) {
     if (hold) { scenario.holdMs = parseInt(hold[1], 10); continue; }
     const music = line.match(/^music:\s*(\S+)/i);
     if (music) { scenario.music = music[1]; continue; }
+    const viewport = line.match(/^viewport:\s*(\d+)\s*x\s*(\d+)/i);
+    if (viewport) { scenario.viewport = { width: parseInt(viewport[1], 10), height: parseInt(viewport[2], 10) }; continue; }
     const bullet = line.match(/^\s*[-*]\s+(.+)$/);
     if (!bullet) continue;
     const body = bullet[1].trim();
@@ -643,7 +645,7 @@ async function main() {
   }
 
   const verdict = failed ? 'FAIL' : 'PASS';
-  const manifest = { name: scenario.name, verdict, base, music: musicTrack, steps: results, video: videoPath };
+  const manifest = { name: scenario.name, verdict, base, music: musicTrack, viewport, steps: results, video: videoPath };
   fs.writeFileSync(path.join(outDir, 'steps.json'), redact(JSON.stringify(manifest, null, 2)));
   console.log(`\n${verdict} ${scenario.name}`);
   // The checkpoints are the QA narrative — the human-meaningful things the run
