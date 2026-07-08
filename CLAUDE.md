@@ -1,5 +1,7 @@
 No mdashes or other AI artifacts when drafting words from me.
 
+Suggest tasks for other agents/subagents if work can happen in parallel.
+
 Prefer removing code than writing new code.
 
 Always ensure there is a code test when you make a code change. Don't rely on method/function names or code comments. Code *is* what it does. Use TDD.

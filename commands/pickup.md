@@ -6,6 +6,6 @@ Ask me questions on how I would like it implemented in the existing project. Inc
 
 Most importantly, let's agree on the entrypoint, preconditions, side-effects and where the side-effects and preconditions need to take place.
 
-Then, create a new branch off a fresh main and we'll work on the implementation.
+Then, create a new worktree off a fresh main and we'll work on the implementation.
 
-Do not commit, stage, or push until asked. If you can't find related projects or issues, ask questions.
+DO NOT COMMIT, STAGE, OR PUSH UNTIL ASKED. IF YOU CAN'T FIND RELATED PROJECTS OR ISSUES, ASK CLARIFYING QUESTIONS.

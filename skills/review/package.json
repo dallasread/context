@@ -1,0 +1,9 @@
+{
+  "name": "review",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Formatting and posting of PR-review comments from QA evidence (Claude Code review skill)",
+    "dependencies": {
+    "playwright": "^1.50.0"
+  }
+}

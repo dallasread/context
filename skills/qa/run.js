@@ -15,13 +15,57 @@ const { chromium } = require('playwright');
 const COOKIES_FILE = path.join(__dirname, 'cookies.json');
 const CREDENTIALS_FILE = path.join(__dirname, 'credentials.json');
 
-const STEP_TIMEOUT_MS = 10_000;
-const DEFAULT_HOLD_MS = 1500; // dwell on each state so the recording is watchable
+const STEP_TIMEOUT_MS = 2_500; // how long an assertion waits for its target; also how long a real failure takes to surface (red), so keep it tight — the app is served locally
+const FAIL_HOLD_MS = 1800; // a failed step holds red a touch longer than a pass holds green, so the failure clearly reads as the end
+const DEFAULT_HOLD_MS = 250; // per-step dwell when a scenario has no checkpoints (classic mode); override with `hold: <n>ms`
+const CHECKPOINT_HOLD_MS = 1000; // a passed checkpoint holds green ~1s before the next one goes in-progress
+const CHECKPOINT_INTRO_MS = 400; // brief in-progress beat when a checkpoint becomes active, before its plumbing runs
 
 // Caption bar injected into the page itself: perfectly synced with the video
 // and included in the frames, no ffmpeg text rendering. pointer-events: none
 // so it can never interfere with the flow under test.
 const CAPTION_COLORS = { running: '#4a4a4a', pass: '#1d7a4f', fail: '#a32d2d' };
+// The Trusty mascot (support widget's own SVG) rides top-right over the caption
+// bar. His sunglass lenses — the two `#ff9138` fills — tint to the step outcome
+// and transition smoothly, so the shades glow green on a pass and red on a fail.
+const TRUSTY_LENS = { running: '#ff9138', pass: '#32c07a', fail: '#f0524f' };
+const TRUSTY_SVG = fs.readFileSync(path.join(__dirname, 'assets', 'trusty-src.svg'), 'utf8');
+
+// Elevator-music beds, all synthesized by ffmpeg's aevalsrc (no external asset,
+// no licensing): a soft four-voice pad under a slow tremolo, plus a plucked
+// arpeggio that steps the current chord up an octave. Each track varies the
+// chord progression, tempo, arpeggio rate, tremolo, and low-pass cutoff for a
+// distinct feel; a run picks one (via --music / a `music:` line, else at
+// random). `pick(idx,[v0..v3])` is a nested-if selecting vN by floor(idx); `seg`
+// is the chord index, `beat` the arpeggio step within a chord.
+const MUSIC_TRACKS = ['lounge', 'twilight', 'sunrise'];
+function buildMusic(track) {
+  const HZ = { F3: 174.61, G3: 196.0, A3: 220.0, B3: 246.94, C4: 261.63, D4: 293.66, E4: 329.63, F4: 349.23, G4: 392.0, A4: 440.0, B4: 493.88, C5: 523.25 };
+  const TRACKS = {
+    // I–vi–ii–V in C: mellow lounge (the original bed).
+    lounge:   { chords: [['C4', 'E4', 'G4', 'B4'], ['A3', 'C4', 'E4', 'G4'], ['D4', 'F4', 'A4', 'C5'], ['G3', 'B3', 'D4', 'F4']], segSec: 2,   arpDivSec: 0.5,   tremRate: 0.15, lowpass: 2200 },
+    // Slower, darker, dreamier — longer chords, lazier arpeggio, softer top end.
+    twilight: { chords: [['F3', 'A3', 'C4', 'E4'], ['C4', 'E4', 'G4', 'B4'], ['D4', 'F4', 'A4', 'C5'], ['A3', 'C4', 'E4', 'G4']], segSec: 2.5, arpDivSec: 0.75,  tremRate: 0.1,  lowpass: 1700 },
+    // I–V–vi–IV pop turnaround: quicker, brighter, busier arpeggio.
+    sunrise:  { chords: [['C4', 'E4', 'G4', 'B4'], ['G3', 'B3', 'D4', 'F4'], ['A3', 'C4', 'E4', 'G4'], ['F3', 'A3', 'C4', 'E4']], segSec: 1.5, arpDivSec: 0.375, tremRate: 0.2,  lowpass: 2600 },
+  };
+  const t = TRACKS[track] || TRACKS.lounge;
+  const chords = t.chords.map((c) => c.map((n) => HZ[n]));
+  const loopSec = chords.length * t.segSec;
+  const pick = (idx, v) => `if(lt(${idx},1),${v[0]},if(lt(${idx},2),${v[1]},if(lt(${idx},3),${v[2]},${v[3]})))`;
+  const seg = `floor(mod(t,${loopSec})/${t.segSec})`;
+  const beat = `floor(mod(t,${t.segSec})/${t.arpDivSec})`;
+  const sine = (f) => `sin(2*PI*(${f})*t)`;
+  // Pad: four voices, each 0.09 (≤0.36 summed); ×0.7 master ×tremolo (≤1) plus
+  // the ≤0.16 arpeggio keeps the peak ~0.41, well under clipping.
+  const pad = [0, 1, 2, 3].map((k) => `0.09*${sine(pick(seg, chords.map((c) => c[k])))}`).join('+');
+  const tremolo = `(0.85+0.15*sin(2*PI*${t.tremRate}*t))`;
+  const arpFreq = pick(seg, chords.map((c) => pick(beat, c.map((f) => (f * 2).toFixed(2)))));
+  const pluck = `exp(-5*mod(t,${t.arpDivSec}))`;
+  const expr = `0.7*(${pad})*${tremolo}+0.16*${pluck}*${sine(arpFreq)}`;
+  // Commas inside the expression must be escaped for the lavfi option parser.
+  return { src: `aevalsrc=${expr.replace(/,/g, '\\,')}:c=stereo:s=32000`, lowpass: t.lowpass };
+}
 
 // Smooth scroll (instead of an instant jump) so the movement itself is
 // recorded — the recorder only captures frames when the page repaints.
@@ -34,7 +78,8 @@ async function smoothScrollTo(locator) {
 // gets real frames through the hold instead of one long frozen frame.
 async function holdWithMotion(page, ms) {
   await page.evaluate(async (ms) => {
-    const bar = document.getElementById('__qa_caption__');
+    const host = document.getElementById('__qa_host__');
+    const bar = host && host.__qaShadow && host.__qaShadow.getElementById('cap');
     const prog = document.createElement('div');
     prog.style.cssText = 'position:absolute;left:0;bottom:0;height:4px;width:0%;background:rgba(255,255,255,0.4);';
     bar?.appendChild(prog);
@@ -52,18 +97,95 @@ async function holdWithMotion(page, ms) {
   }, ms).catch(() => page.waitForTimeout(ms));
 }
 
-async function setCaption(page, text, state = 'running') {
-  await page.evaluate(([text, bg]) => {
-    let el = document.getElementById('__qa_caption__');
-    if (!el) {
-      el = document.createElement('div');
-      el.id = '__qa_caption__';
-      el.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:2147483647;padding:16px 20px;font:600 24px/1.4 -apple-system,sans-serif;color:#fff;pointer-events:none;';
-      document.body.appendChild(el);
+// A rAF-driven pause: forces repaints for `ms` so an in-page animation (a click
+// ripple, a CSS transition) is actually captured — the recorder only grabs
+// frames when the page paints.
+async function spinFrames(page, ms) {
+  await page.evaluate((ms) => new Promise((resolve) => {
+    const start = performance.now();
+    const tick = (t) => (t - start >= ms ? resolve() : requestAnimationFrame(tick));
+    requestAnimationFrame(tick);
+  }), ms).catch(() => page.waitForTimeout(ms));
+}
+
+// Draw a click highlight — an expanding gold ring plus a cursor dot — centered
+// on a viewport point, so clicks are visible on camera (a headless recording
+// never shows the real OS cursor). It lives in the SAME closed shadow root as
+// the caption chrome: pointer-events:none and text-free, so it neither blocks
+// the click nor is ever seen by a `see` assertion. Self-removes after the run.
+async function showClick(page, x, y) {
+  await page.evaluate(([x, y]) => {
+    const host = document.getElementById('__qa_host__');
+    const shadow = host && host.__qaShadow;
+    if (!shadow) return;
+    if (!shadow.getElementById('__qa_click_style__')) {
+      const st = document.createElement('style');
+      st.id = '__qa_click_style__';
+      st.textContent =
+        '@keyframes qaRing{from{transform:translate(-50%,-50%) scale(.25);opacity:.95}to{transform:translate(-50%,-50%) scale(1);opacity:0}}'
+        + '@keyframes qaDot{0%{transform:translate(-50%,-50%) scale(.5);opacity:0}25%{opacity:1}100%{transform:translate(-50%,-50%) scale(1.15);opacity:0}}'
+        + '.qa-click{position:fixed;z-index:2147483646;pointer-events:none}'
+        + '.qa-click i{position:absolute;left:0;top:0;border-radius:50%;display:block}'
+        + '.qa-click .ring{width:72px;height:72px;border:4px solid #ffd24a;box-shadow:0 0 14px rgba(255,210,74,.85);animation:qaRing .9s ease-out forwards}'
+        + '.qa-click .dot{width:24px;height:24px;background:#ffd24a;box-shadow:0 0 12px rgba(255,210,74,.95);animation:qaDot .9s ease-out forwards}';
+      shadow.appendChild(st);
     }
-    el.style.background = bg;
-    el.textContent = text;
-  }, [text, CAPTION_COLORS[state]]).catch(() => {});
+    const c = document.createElement('div');
+    c.className = 'qa-click';
+    c.style.left = `${x}px`;
+    c.style.top = `${y}px`;
+    c.innerHTML = '<i class="ring"></i><i class="dot"></i>';
+    shadow.appendChild(c);
+    setTimeout(() => c.remove(), 1000);
+  }, [x, y]).catch(() => {});
+}
+
+async function setCaption(page, text, state = 'running', checkpoint = false) {
+  await page.evaluate(([text, bg, lens, svg, checkpoint]) => {
+    // QA chrome — the caption bar and the Trusty mascot — lives inside a CLOSED
+    // shadow root, so it is completely invisible to the automation querying the
+    // page under test. Playwright pierces OPEN shadow roots but cannot see
+    // CLOSED ones, which is the whole point: a `see "X"` step sets the caption
+    // to a label containing X, and if the chrome were in the light DOM (or an
+    // open root) getByText(X) would match the caption itself and the assertion
+    // could never fail. The isolation — not any text-rendering trick — is what
+    // keeps text assertions honest. The closed root's handle is stashed on the
+    // host element so both this function and holdWithMotion can reach in; the
+    // whole thing is recreated after navigation wipes the DOM.
+    let host = document.getElementById('__qa_host__');
+    let shadow;
+    if (!host) {
+      host = document.createElement('div');
+      host.id = '__qa_host__';
+      host.style.pointerEvents = 'none';
+      document.body.appendChild(host);
+      shadow = host.attachShadow({ mode: 'closed' });
+      host.__qaShadow = shadow;
+      shadow.innerHTML =
+        '<style>'
+        // Plumbing steps read as subdued mechanical narration; checkpoints —
+        // the human-meaningful moments — pop with a gold left accent and larger
+        // type, so a viewer's eye lands on exactly the things the change set out
+        // to prove.
+        + '#cap{position:fixed;left:0;right:0;top:0;z-index:2147483647;padding:13px 20px;font:500 19px/1.4 -apple-system,sans-serif;color:#fff;pointer-events:none;opacity:.9;transition:opacity .2s ease,padding .2s ease}'
+        + '#cap.cp{padding:18px 22px;font-weight:700;font-size:26px;opacity:1;box-shadow:inset 8px 0 0 #ffd24a}'
+        + '#captext{vertical-align:middle}'
+        + '#trusty{position:fixed;top:4px;right:16px;width:104px;height:104px;z-index:2147483647;pointer-events:none;filter:drop-shadow(0 2px 4px rgba(0,0,0,.35))}'
+        + '#trusty svg{width:100%;height:100%;display:block}'
+        + '#trusty [fill="#ff9138"]{fill:var(--lens);transition:fill .35s ease}'
+        + '</style><div id="cap"><span id="captext"></span></div><div id="trusty"></div>';
+      shadow.getElementById('trusty').innerHTML = svg;
+    } else {
+      shadow = host.__qaShadow;
+    }
+    const cap = shadow.getElementById('cap');
+    cap.className = checkpoint ? 'cp' : '';
+    cap.style.background = bg;
+    shadow.getElementById('captext').textContent = text;
+    // Trusty's two lens fills follow --lens (orange running, green pass, red
+    // fail), transitioned so the shade change reads as a smooth glow.
+    shadow.getElementById('trusty').style.setProperty('--lens', lens);
+  }, [text, CAPTION_COLORS[state], TRUSTY_LENS[state], TRUSTY_SVG, checkpoint]).catch(() => {});
 }
 
 // Browser cookies ignore ports, so stores fall back from "host:port" to bare
@@ -131,9 +253,19 @@ async function runStep(page, step, base) {
       }
       break;
     }
-    case 'click':
-      await page.locator(step.selector).first().click({ timeout: STEP_TIMEOUT_MS });
+    case 'click': {
+      const loc = page.locator(step.selector).first();
+      // Settle the target in view, mark where the click lands, let the ring
+      // register on camera, then perform the real click.
+      await loc.scrollIntoViewIfNeeded({ timeout: STEP_TIMEOUT_MS }).catch(() => {});
+      const box = await loc.boundingBox().catch(() => null);
+      if (box) {
+        await showClick(page, box.x + box.width / 2, box.y + box.height / 2);
+        await spinFrames(page, 300);
+      }
+      await loc.click({ timeout: STEP_TIMEOUT_MS });
       break;
+    }
     case 'fill':
       await page.locator(step.selector).first().fill(step.value, { timeout: STEP_TIMEOUT_MS });
       break;
@@ -160,7 +292,20 @@ async function runStep(page, step, base) {
 }
 
 function stepLabel(step) {
-  return step.caption || `${step.action} ${step.path || step.selector || step.text || step.ms || ''}`.trim();
+  return step.checkpoint || step.caption || `${step.action} ${step.path || step.selector || step.text || step.ms || ''}`.trim();
+}
+
+// A step becomes a CHECKPOINT — a human-meaningful moment tied to the change's
+// goal — when the author appends " :: <caption>" to the bullet. The part before
+// the first " :: " parses as the executable step (verb regexes are $-anchored,
+// so the suffix must be stripped before matching); the part after is free prose
+// shown prominently on camera and collected as the QA narrative. Steps without
+// it stay mechanical plumbing and display their raw syntax. The delimiter needs
+// surrounding spaces, so CSS pseudo-elements ("div::before") never collide.
+function splitCheckpoint(body) {
+  const i = body.indexOf(' :: ');
+  if (i === -1) return { stepBody: body, checkpoint: null };
+  return { stepBody: body.slice(0, i).trim(), checkpoint: body.slice(i + 4).trim() || null };
 }
 
 // Markdown scenario: prose and headings are free-form documentation; only
@@ -215,7 +360,8 @@ function macroSteps(name, config) {
       .filter(Boolean)
       .map((body) => {
         if (/^run\s/i.test(body)) throw new Error(`NESTED_MACRO in "${name}" — macros cannot call macros`);
-        return { ...parseStep(substituteVariables(body, config), name), caption: `${name} › ${body}` };
+        const { stepBody, checkpoint } = splitCheckpoint(body);
+        return { ...parseStep(substituteVariables(stepBody, config), name), caption: `${name} › ${stepBody}`, checkpoint };
       });
 }
 
@@ -229,19 +375,25 @@ function parseMarkdownScenario(text, config = {}) {
     if (setting) { scenario.base = setting[1]; continue; }
     const hold = line.match(/^hold:\s*(\d+)ms/i);
     if (hold) { scenario.holdMs = parseInt(hold[1], 10); continue; }
+    const music = line.match(/^music:\s*(\S+)/i);
+    if (music) { scenario.music = music[1]; continue; }
     const bullet = line.match(/^\s*[-*]\s+(.+)$/);
     if (!bullet) continue;
     const body = bullet[1].trim();
 
+    const { stepBody, checkpoint } = splitCheckpoint(body);
+
     // `run <macro>` expands a repo-defined multi-line step string inline,
-    // one level deep — macros contain only primitive verbs.
-    const macroCall = body.match(/^run\s+(\S+)$/i);
+    // one level deep — macros contain only primitive verbs. A checkpoint
+    // caption belongs on a single primitive step, not on a macro expansion.
+    const macroCall = stepBody.match(/^run\s+(\S+)$/i);
     if (macroCall) {
+      if (checkpoint) throw new Error(`CHECKPOINT_ON_MACRO "${body}" — attach ":: caption" to a primitive step inside the flow, not to "run <macro>"`);
       scenario.steps.push(...macroSteps(macroCall[1], config));
       continue;
     }
 
-    scenario.steps.push({ ...parseStep(substituteVariables(body, config)), caption: body });
+    scenario.steps.push({ ...parseStep(substituteVariables(stepBody, config)), caption: stepBody, checkpoint });
   }
 
   if (!scenario.steps.length) throw new Error('EMPTY_SCENARIO — no recognized step bullets found');
@@ -254,6 +406,7 @@ async function main() {
       out: { type: 'string' },
       base: { type: 'string' },
       repo: { type: 'string' },
+      music: { type: 'string' },
       'no-auth': { type: 'boolean', default: false },
     },
     allowPositionals: true,
@@ -277,6 +430,7 @@ async function main() {
   const viewport = scenario.viewport || { width: 1280, height: 900 };
   const outDir = path.resolve(values.out);
   const framesDir = path.join(outDir, 'frames');
+  fs.rmSync(framesDir, { recursive: true, force: true }); // wipe a prior run's frames so numbering never mixes across runs
   fs.mkdirSync(framesDir, { recursive: true });
   fs.writeFileSync(path.join(outDir, path.basename(positionals[0])), redact(raw));
 
@@ -301,18 +455,52 @@ async function main() {
   const page = await ctx.newPage();
   const videoStartedAt = Date.now(); // recording starts with the page
   const results = [];
-  const holdMs = scenario.holdMs || DEFAULT_HOLD_MS;
+  const rawHoldMs = scenario.holdMs;                  // set only by a `hold: <n>ms` line
+  const stepHoldMs = rawHoldMs ?? DEFAULT_HOLD_MS;     // per-step dwell in classic (no-checkpoint) mode
+  const celebrateMs = rawHoldMs ?? CHECKPOINT_HOLD_MS; // how long a passed checkpoint holds green
+  let musicTrack = values.music || scenario.music || MUSIC_TRACKS[Math.floor(Math.random() * MUSIC_TRACKS.length)];
+  if (!MUSIC_TRACKS.includes(musicTrack)) {
+    console.warn(`  (unknown music "${musicTrack}" — using lounge; choices: ${MUSIC_TRACKS.join(', ')})`);
+    musicTrack = 'lounge';
+  }
   const total = scenario.steps.length;
+  // Checkpoints drive the video. The caption bar shows ONLY checkpoints: each
+  // goes in-progress, the plumbing steps leading to it run off-camera under that
+  // in-progress caption, then it flips green and holds a beat before the next
+  // one arms. A scenario with no checkpoints falls back to captioning every step.
+  const cpList = scenario.steps
+    .map((s, i) => (s.checkpoint ? { i, label: redact(stepLabel(s)) } : null))
+    .filter(Boolean);
+  const K = cpList.length;
+  const hasCheckpoints = K > 0;
+  const cpCaption = (p) => (K > 1 ? `${p + 1}/${K}  ${cpList[p].label}` : cpList[p].label);
+  const dwell = (ms) => spinFrames(page, ms); // static hold that still repaints for the recorder
+  const snap = async (i, step, record) => {
+    const frame = path.join(framesDir, `${String(i + 1).padStart(2, '0')}-${step.action}.png`);
+    try { await page.screenshot({ path: frame, fullPage: false }); record.frame = frame; } catch {}
+  };
+  let nextCp = 0; // position in `checkpoints` of the next one not yet reached
   let failed = false;
   let reauthed = false;
   let firstContentAtSec = 0; // used to trim the blank lead-in before step 1 rendered
 
+  // Arm the first checkpoint's in-progress caption so it is already on screen as
+  // the opening plumbing runs (the pre-content lead-in is trimmed from the mp4).
+  if (hasCheckpoints) {
+    await setCaption(page, `⏳ ${cpCaption(0)}`, 'running', true);
+    await dwell(CHECKPOINT_INTRO_MS);
+  }
+
   for (const [i, step] of scenario.steps.entries()) {
     const n = String(i + 1).padStart(2, '0');
+    const isCheckpoint = !!step.checkpoint;
     const label = redact(stepLabel(step));
-    const caption = `${i + 1}/${total}  ${label}`;
-    const record = { n: i + 1, action: step.action, caption: label };
-    await setCaption(page, `⏳ ${caption}`);
+    const record = { n: i + 1, action: step.action, checkpoint: isCheckpoint, caption: label };
+
+    // Classic mode (no checkpoints): caption every step as it runs.
+    if (!hasCheckpoints) await setCaption(page, `⏳ ${i + 1}/${total}  ${label}`, 'running', false);
+
+    let error = null;
     try {
       try {
         await runStep(page, step, base);
@@ -323,23 +511,57 @@ async function main() {
         await formLogin(page, base, cookieHost, creds);
         await runStep(page, step, base);
       }
-      record.ok = true;
-      console.log(`  ${n} PASS ${label}`);
-      await setCaption(page, `✅ ${caption}`, 'pass'); // navigation wipes the bar; re-set it
     } catch (e) {
-      record.ok = false;
-      record.error = redact(e.message.split('\n')[0]);
-      failed = true;
-      console.error(`  ${n} FAIL ${label}\n     ${record.error}`);
-      await setCaption(page, `❌ ${caption}  FAIL`, 'fail');
+      error = redact(e.message.split('\n')[0]);
     }
     if (i === 0) firstContentAtSec = Math.max(0, (Date.now() - videoStartedAt) / 1000 - 0.4);
     record.url = page.url();
-    await holdWithMotion(page, holdMs);
-    const frame = path.join(framesDir, `${n}-${step.action}.png`);
-    try { await page.screenshot({ path: frame, fullPage: false }); record.frame = frame; } catch {}
+
+    if (error) {
+      // A failure — plumbing or checkpoint — is always shown and stops the run.
+      record.ok = false;
+      record.error = error;
+      failed = true;
+      console.error(`  ${n} FAIL ${label}\n     ${error}`);
+      const failCaption = hasCheckpoints && !isCheckpoint
+        ? `❌ ${cpCaption(Math.min(nextCp, K - 1))}  —  FAILED: ${label}`
+        : hasCheckpoints
+          ? `❌ ${cpCaption(nextCp)}  FAIL`
+          : `❌ ${i + 1}/${total}  ${label}  FAIL`;
+      await setCaption(page, failCaption, 'fail', isCheckpoint || !hasCheckpoints);
+      await dwell(FAIL_HOLD_MS);
+      await snap(i, step, record);
+      results.push(record);
+      break;
+    }
+
+    record.ok = true;
+    console.log(`  ${n} PASS ${label}`);
+
+    if (!hasCheckpoints) {
+      await setCaption(page, `✅ ${i + 1}/${total}  ${label}`, 'pass', false);
+      if (stepHoldMs > 0) await holdWithMotion(page, stepHoldMs);
+      else await dwell(0);
+      await snap(i, step, record);
+    } else if (isCheckpoint) {
+      // Celebrate: flip the in-progress caption green, hold it a beat, and
+      // capture this checkpoint's frame — the meaningful on-camera evidence.
+      await setCaption(page, `✅ ${cpCaption(nextCp)}`, 'pass', true);
+      await dwell(celebrateMs);
+      await snap(i, step, record);
+      nextCp += 1;
+      if (nextCp < K) { // arm the next checkpoint for the plumbing that follows
+        await setCaption(page, `⏳ ${cpCaption(nextCp)}`, 'running', true);
+        await dwell(CHECKPOINT_INTRO_MS);
+      }
+    } else {
+      // Plumbing: keep (and restore, since navigation wipes the chrome) the
+      // in-progress checkpoint caption. No dwell, no frame — it stays off-camera.
+      const done = nextCp >= K;
+      await setCaption(page, `${done ? '✅' : '⏳'} ${cpCaption(done ? K - 1 : nextCp)}`, done ? 'pass' : 'running', true);
+      await dwell(0);
+    }
     results.push(record);
-    if (!record.ok) break; // later steps are meaningless after a failure
   }
 
   const video = page.video();
@@ -352,17 +574,44 @@ async function main() {
     videoPath = path.join(outDir, 'qa.mp4');
     // Constant 30fps: real motion frames come from holdWithMotion/smooth
     // scrolling (the recorder only captures on repaint); fps=30 normalizes.
-    // -ss (after -i: accurate seek) trims the blank lead-in before the first
-    // step's page rendered.
-    execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', webm, '-ss', firstContentAtSec.toFixed(2), '-vf', 'fps=30', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', videoPath]);
+    // The lead-in before the first step's page rendered is trimmed inside the
+    // filter graph (trim=start=… + setpts).
+    //
+    // Branding: the Trusty mascot (with outcome-reactive shades) is drawn into
+    // the page during the run, so nothing is overlaid here. The "elevator music"
+    // bed is synthesized entirely by ffmpeg's aevalsrc (no external asset, no
+    // licensing) — see buildMusic for the chosen track's progression, tempo, and
+    // feel — then mixed in and cut to the video length with -shortest.
+    const { src: music, lowpass } = buildMusic(musicTrack);
+    const filter = [
+      `[0:v]trim=start=${firstContentAtSec.toFixed(2)},setpts=PTS-STARTPTS,fps=30[v]`,
+      `[1:a]lowpass=f=${lowpass},afade=t=in:st=0:d=1.5[a]`
+    ].join(';');
+    execFileSync('ffmpeg', [
+      '-y', '-loglevel', 'error',
+      '-i', webm,
+      '-f', 'lavfi', '-i', music,
+      '-filter_complex', filter,
+      '-map', '[v]', '-map', '[a]', '-shortest',
+      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '96k',
+      videoPath
+    ]);
     fs.rmSync(webm);
   }
 
   const verdict = failed ? 'FAIL' : 'PASS';
-  const manifest = { name: scenario.name, verdict, base, steps: results, video: videoPath };
+  const manifest = { name: scenario.name, verdict, base, music: musicTrack, steps: results, video: videoPath };
   fs.writeFileSync(path.join(outDir, 'steps.json'), redact(JSON.stringify(manifest, null, 2)));
   console.log(`\n${verdict} ${scenario.name}`);
-  console.log(`  video:  ${videoPath}`);
+  // The checkpoints are the QA narrative — the human-meaningful things the run
+  // set out to prove. Surface them as a checklist so the verdict reads as
+  // "here is what was verified", ready to drop into a PR's QA section.
+  const checkpoints = results.filter((r) => r.checkpoint);
+  if (checkpoints.length) {
+    console.log('  checkpoints:');
+    for (const c of checkpoints) console.log(`    ${c.ok ? '✓' : '✗'} ${c.caption}`);
+  }
+  console.log(`  video:  ${videoPath}  (music: ${musicTrack})`);
   console.log(`  frames: ${framesDir}`);
   process.exit(failed ? 1 : 0);
 }
