@@ -59,7 +59,7 @@ chk "T1 click step passed"                  "[ \"\$(sj '$CJSON' 'd.steps[1].ok')
 chk "T1 revealed-text checkpoint passed"    "[ \"\$(sj '$CJSON' 'd.steps[2].ok')\" = true ]"
 
 # --- T2: every named music track produces a valid mp4 ----------------------
-for track in lounge twilight sunrise; do
+for track in lounge twilight sunrise reggae ska; do
   cat > "$TMPROOT/m.md" <<EOF
 # music $track
 - visit /

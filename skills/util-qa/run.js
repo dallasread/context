@@ -25,20 +25,34 @@ const CHECKPOINT_INTRO_MS = 400; // brief in-progress beat when a checkpoint bec
 // and included in the frames, no ffmpeg text rendering. pointer-events: none
 // so it can never interfere with the flow under test.
 const CAPTION_COLORS = { running: '#4a4a4a', pass: '#1d7a4f', fail: '#a32d2d' };
-// The Trusty mascot (support widget's own SVG) rides top-right over the caption
-// bar. His sunglass lenses — the two `#ff9138` fills — tint to the step outcome
-// and transition smoothly, so the shades glow green on a pass and red on a fail.
-const TRUSTY_LENS = { running: '#ff9138', pass: '#32c07a', fail: '#f0524f' };
-const TRUSTY_SVG = fs.readFileSync(path.join(__dirname, 'assets', 'trusty-src.svg'), 'utf8');
+// A corner badge — the little SVG that rides bottom-right over the caption bar —
+// is supplied by the repo's profile, not the engine: distinct art per outcome
+// state (running/pass/fail, and any future state), loaded by loadBadges. The
+// engine carries no default mascot, so a repo without a `badge` in its profile
+// shows nothing there. See loadBadges for the mapping.
+//
+// The caption chrome's stylesheet, anchored to the BOTTOM of the frame so it
+// reads like a subtitle track under the app rather than masking the app's own
+// header. Plumbing steps read as subdued mechanical narration; checkpoints — the
+// human-meaningful moments — pop with a gold left accent and larger type, so a
+// viewer's eye lands on exactly the things the change set out to prove. The
+// badge is anchored to the same bottom edge so it keeps riding over the bar.
+const CAPTION_CSS =
+    '#cap{position:fixed;left:0;right:0;bottom:0;z-index:2147483647;padding:13px 20px;font:500 19px/1.4 -apple-system,sans-serif;color:#fff;pointer-events:none;opacity:.9;transition:opacity .2s ease,padding .2s ease}'
+  + '#cap.cp{padding:18px 22px;font-weight:700;font-size:26px;opacity:1;box-shadow:inset 8px 0 0 #ffd24a}'
+  + '#captext{vertical-align:middle}'
+  + '#badge{position:fixed;bottom:4px;right:16px;width:104px;height:104px;z-index:2147483647;pointer-events:none;filter:drop-shadow(0 2px 4px rgba(0,0,0,.35))}'
+  + '#badge svg{width:100%;height:100%;display:block}';
 
 // Elevator-music beds, all synthesized by ffmpeg's aevalsrc (no external asset,
 // no licensing): a soft four-voice pad under a slow tremolo, plus a plucked
 // arpeggio that steps the current chord up an octave. Each track varies the
 // chord progression, tempo, arpeggio rate, tremolo, and low-pass cutoff for a
 // distinct feel; a run picks one (via --music / a `music:` line, else at
-// random). `pick(idx,[v0..v3])` is a nested-if selecting vN by floor(idx); `seg`
-// is the chord index, `beat` the arpeggio step within a chord.
-const MUSIC_TRACKS = ['lounge', 'twilight', 'sunrise'];
+// random). A track may set `skank: true` to swap the smooth tremolo for an
+// offbeat chop (the reggae and ska beds). `pick(idx,[v0..v3])` is a nested-if selecting
+// vN by floor(idx); `seg` is the chord index, `beat` the arpeggio step within a chord.
+const MUSIC_TRACKS = ['lounge', 'twilight', 'sunrise', 'reggae', 'ska'];
 function buildMusic(track) {
   const HZ = { F3: 174.61, G3: 196.0, A3: 220.0, B3: 246.94, C4: 261.63, D4: 293.66, E4: 329.63, F4: 349.23, G4: 392.0, A4: 440.0, B4: 493.88, C5: 523.25 };
   const TRACKS = {
@@ -48,6 +62,14 @@ function buildMusic(track) {
     twilight: { chords: [['F3', 'A3', 'C4', 'E4'], ['C4', 'E4', 'G4', 'B4'], ['D4', 'F4', 'A4', 'C5'], ['A3', 'C4', 'E4', 'G4']], segSec: 2.5, arpDivSec: 0.75,  tremRate: 0.1,  lowpass: 1700 },
     // I–V–vi–IV pop turnaround: quicker, brighter, busier arpeggio.
     sunrise:  { chords: [['C4', 'E4', 'G4', 'B4'], ['G3', 'B3', 'D4', 'F4'], ['A3', 'C4', 'E4', 'G4'], ['F3', 'A3', 'C4', 'E4']], segSec: 1.5, arpDivSec: 0.375, tremRate: 0.2,  lowpass: 2600 },
+    // vi–IV–I–V roots with a `skank: true` offbeat chop instead of the smooth
+    // tremolo — the staccato pad lands between the arp plucks, the reggae bubble.
+    // Warm/dubby low-pass; the gate ∈ [0,1] like the tremolo, so the peak-amplitude
+    // headroom below is unchanged.
+    reggae:   { chords: [['A3', 'C4', 'E4', 'G4'], ['F3', 'A3', 'C4', 'E4'], ['C4', 'E4', 'G4', 'B4'], ['G3', 'B3', 'D4', 'F4']], segSec: 2,   arpDivSec: 0.4,   tremRate: 0.15, lowpass: 1600, skank: true },
+    // Ska is the skank at double time: bright major I–IV–V–IV, a fast upstroke
+    // chop (small arpDivSec = the "chukka-chukka"), brighter top end than reggae.
+    ska:      { chords: [['C4', 'E4', 'G4', 'B4'], ['F3', 'A3', 'C4', 'E4'], ['G3', 'B3', 'D4', 'F4'], ['F3', 'A3', 'C4', 'E4']], segSec: 1.5, arpDivSec: 0.25,  tremRate: 0.2,  lowpass: 2800, skank: true },
   };
   const t = TRACKS[track] || TRACKS.lounge;
   const chords = t.chords.map((c) => c.map((n) => HZ[n]));
@@ -60,9 +82,14 @@ function buildMusic(track) {
   // the ≤0.16 arpeggio keeps the peak ~0.41, well under clipping.
   const pad = [0, 1, 2, 3].map((k) => `0.09*${sine(pick(seg, chords.map((c) => c[k])))}`).join('+');
   const tremolo = `(0.85+0.15*sin(2*PI*${t.tremRate}*t))`;
+  // Skank (reggae/ska): gate the pad with a sharp decaying chop landing on the
+  // offbeat (half an arp-step out of phase with the pluck), giving staccato
+  // upstroke chords instead of the smooth tremolo. Gate ∈ [0,1], same peak as tremolo.
+  const skank = `exp(-8*mod(t+${(t.arpDivSec / 2).toFixed(4)},${t.arpDivSec}))`;
+  const padGate = t.skank ? skank : tremolo;
   const arpFreq = pick(seg, chords.map((c) => pick(beat, c.map((f) => (f * 2).toFixed(2)))));
   const pluck = `exp(-5*mod(t,${t.arpDivSec}))`;
-  const expr = `0.7*(${pad})*${tremolo}+0.16*${pluck}*${sine(arpFreq)}`;
+  const expr = `0.7*(${pad})*${padGate}+0.16*${pluck}*${sine(arpFreq)}`;
   // Commas inside the expression must be escaped for the lavfi option parser.
   return { src: `aevalsrc=${expr.replace(/,/g, '\\,')}:c=stereo:s=32000`, lowpass: t.lowpass };
 }
@@ -140,9 +167,9 @@ async function showClick(page, x, y) {
   }, [x, y]).catch(() => {});
 }
 
-async function setCaption(page, text, state = 'running', checkpoint = false) {
-  await page.evaluate(([text, bg, lens, svg, checkpoint]) => {
-    // QA chrome — the caption bar and the Trusty mascot — lives inside a CLOSED
+async function setCaption(page, text, state = 'running', checkpoint = false, badges = {}) {
+  await page.evaluate(([text, bg, badge, checkpoint, css]) => {
+    // QA chrome — the caption bar and the corner badge — lives inside a CLOSED
     // shadow root, so it is completely invisible to the automation querying the
     // page under test. Playwright pierces OPEN shadow roots but cannot see
     // CLOSED ones, which is the whole point: a `see "X"` step sets the caption
@@ -162,19 +189,7 @@ async function setCaption(page, text, state = 'running', checkpoint = false) {
       shadow = host.attachShadow({ mode: 'closed' });
       host.__qaShadow = shadow;
       shadow.innerHTML =
-        '<style>'
-        // Plumbing steps read as subdued mechanical narration; checkpoints —
-        // the human-meaningful moments — pop with a gold left accent and larger
-        // type, so a viewer's eye lands on exactly the things the change set out
-        // to prove.
-        + '#cap{position:fixed;left:0;right:0;top:0;z-index:2147483647;padding:13px 20px;font:500 19px/1.4 -apple-system,sans-serif;color:#fff;pointer-events:none;opacity:.9;transition:opacity .2s ease,padding .2s ease}'
-        + '#cap.cp{padding:18px 22px;font-weight:700;font-size:26px;opacity:1;box-shadow:inset 8px 0 0 #ffd24a}'
-        + '#captext{vertical-align:middle}'
-        + '#trusty{position:fixed;top:4px;right:16px;width:104px;height:104px;z-index:2147483647;pointer-events:none;filter:drop-shadow(0 2px 4px rgba(0,0,0,.35))}'
-        + '#trusty svg{width:100%;height:100%;display:block}'
-        + '#trusty [fill="#ff9138"]{fill:var(--lens);transition:fill .35s ease}'
-        + '</style><div id="cap"><span id="captext"></span></div><div id="trusty"></div>';
-      shadow.getElementById('trusty').innerHTML = svg;
+        `<style>${css}</style><div id="cap"><span id="captext"></span></div><div id="badge"></div>`;
     } else {
       shadow = host.__qaShadow;
     }
@@ -182,10 +197,13 @@ async function setCaption(page, text, state = 'running', checkpoint = false) {
     cap.className = checkpoint ? 'cp' : '';
     cap.style.background = bg;
     shadow.getElementById('captext').textContent = text;
-    // Trusty's two lens fills follow --lens (orange running, green pass, red
-    // fail), transitioned so the shade change reads as a smooth glow.
-    shadow.getElementById('trusty').style.setProperty('--lens', lens);
-  }, [text, CAPTION_COLORS[state], TRUSTY_LENS[state], TRUSTY_SVG, checkpoint]).catch(() => {});
+    // Swap the corner badge to this state's art. The profile supplies distinct
+    // art per outcome (empty when it defines none for this state → hidden), so
+    // the engine just drops in whatever SVG this state maps to.
+    const badgeEl = shadow.getElementById('badge');
+    badgeEl.innerHTML = badge;
+    badgeEl.style.display = badge ? '' : 'none';
+  }, [text, CAPTION_COLORS[state], badges[state] || '', checkpoint, CAPTION_CSS]).catch(() => {});
 }
 
 // Browser cookies ignore ports, so stores fall back from "host:port" to bare
@@ -209,6 +227,26 @@ function loadRepoConfig(repo, host) {
     if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, 'utf8'));
   }
   return hostEntry(CREDENTIALS_FILE, host);
+}
+
+// The corner badge is profile-owned branding: profiles/<repo>.json may carry a
+// `badge` map of state → SVG filename (resolved against profiles/, or an
+// absolute path). Returns { state: svgSource } for the states whose files exist;
+// a missing file is warned and skipped (never fatal), and a profile with no
+// `badge` yields {} — the engine ships no default, so branding lives entirely in
+// the profile. The keys match the caption states (running/pass/fail), and since
+// setCaption just looks up badges[state], a profile can brand any future state
+// by adding its key here.
+function loadBadges(repoConfig, baseDir = path.join(__dirname, 'profiles')) {
+  const map = repoConfig?.badge;
+  if (!map || typeof map !== 'object') return {};
+  const out = {};
+  for (const [state, file] of Object.entries(map)) {
+    const svgPath = path.resolve(baseDir, file);
+    if (fs.existsSync(svgPath)) out[state] = fs.readFileSync(svgPath, 'utf8');
+    else console.warn(`  (badge for "${state}" not found: ${file})`);
+  }
+  return out;
 }
 
 // Redact configured credential values from anything the runner emits
@@ -424,6 +462,7 @@ async function main() {
   const base = values.base || scenario.base || 'http://localhost:3000';
   const cookieHost = scenario.cookieHost || new URL(base).host;
   const creds = values['no-auth'] ? null : repoConfig;
+  const badges = loadBadges(repoConfig); // profile-owned corner art, keyed by state
   // Redaction backstop: every variable value is treated as sensitive (short
   // ones excepted — redacting "1" would mangle unrelated output).
   SECRETS = Object.values(repoConfig?.variables || {}).map(String).filter((v) => v.length >= 4);
@@ -483,11 +522,14 @@ async function main() {
   let failed = false;
   let reauthed = false;
   let firstContentAtSec = 0; // used to trim the blank lead-in before step 1 rendered
+  // Bind the page and this run's profile badges to every caption update, so each
+  // call just says what to show and which state it is.
+  const caption = (text, state, cp = false) => setCaption(page, text, state, cp, badges);
 
   // Arm the first checkpoint's in-progress caption so it is already on screen as
   // the opening plumbing runs (the pre-content lead-in is trimmed from the mp4).
   if (hasCheckpoints) {
-    await setCaption(page, `⏳ ${cpCaption(0)}`, 'running', true);
+    await caption(`⏳ ${cpCaption(0)}`, 'running', true);
     await dwell(CHECKPOINT_INTRO_MS);
   }
 
@@ -498,7 +540,7 @@ async function main() {
     const record = { n: i + 1, action: step.action, checkpoint: isCheckpoint, caption: label };
 
     // Classic mode (no checkpoints): caption every step as it runs.
-    if (!hasCheckpoints) await setCaption(page, `⏳ ${i + 1}/${total}  ${label}`, 'running', false);
+    if (!hasCheckpoints) await caption(`⏳ ${i + 1}/${total}  ${label}`, 'running', false);
 
     let error = null;
     try {
@@ -528,7 +570,7 @@ async function main() {
         : hasCheckpoints
           ? `❌ ${cpCaption(nextCp)}  FAIL`
           : `❌ ${i + 1}/${total}  ${label}  FAIL`;
-      await setCaption(page, failCaption, 'fail', isCheckpoint || !hasCheckpoints);
+      await caption(failCaption, 'fail', isCheckpoint || !hasCheckpoints);
       await dwell(FAIL_HOLD_MS);
       await snap(i, step, record);
       results.push(record);
@@ -539,26 +581,26 @@ async function main() {
     console.log(`  ${n} PASS ${label}`);
 
     if (!hasCheckpoints) {
-      await setCaption(page, `✅ ${i + 1}/${total}  ${label}`, 'pass', false);
+      await caption(`✅ ${i + 1}/${total}  ${label}`, 'pass', false);
       if (stepHoldMs > 0) await holdWithMotion(page, stepHoldMs);
       else await dwell(0);
       await snap(i, step, record);
     } else if (isCheckpoint) {
       // Celebrate: flip the in-progress caption green, hold it a beat, and
       // capture this checkpoint's frame — the meaningful on-camera evidence.
-      await setCaption(page, `✅ ${cpCaption(nextCp)}`, 'pass', true);
+      await caption(`✅ ${cpCaption(nextCp)}`, 'pass', true);
       await dwell(celebrateMs);
       await snap(i, step, record);
       nextCp += 1;
       if (nextCp < K) { // arm the next checkpoint for the plumbing that follows
-        await setCaption(page, `⏳ ${cpCaption(nextCp)}`, 'running', true);
+        await caption(`⏳ ${cpCaption(nextCp)}`, 'running', true);
         await dwell(CHECKPOINT_INTRO_MS);
       }
     } else {
       // Plumbing: keep (and restore, since navigation wipes the chrome) the
       // in-progress checkpoint caption. No dwell, no frame — it stays off-camera.
       const done = nextCp >= K;
-      await setCaption(page, `${done ? '✅' : '⏳'} ${cpCaption(done ? K - 1 : nextCp)}`, done ? 'pass' : 'running', true);
+      await caption(`${done ? '✅' : '⏳'} ${cpCaption(done ? K - 1 : nextCp)}`, done ? 'pass' : 'running', true);
       await dwell(0);
     }
     results.push(record);
@@ -577,8 +619,9 @@ async function main() {
     // The lead-in before the first step's page rendered is trimmed inside the
     // filter graph (trim=start=… + setpts).
     //
-    // Branding: the Trusty mascot (with outcome-reactive shades) is drawn into
-    // the page during the run, so nothing is overlaid here. The "elevator music"
+    // Branding: the profile's per-state corner badge is drawn into the page
+    // during the run (see loadBadges/setCaption), so nothing is overlaid here.
+    // The "elevator music"
     // bed is synthesized entirely by ffmpeg's aevalsrc (no external asset, no
     // licensing) — see buildMusic for the chosen track's progression, tempo, and
     // feel — then mixed in and cut to the video length with -shortest.
@@ -616,4 +659,8 @@ async function main() {
   process.exit(failed ? 1 : 0);
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+// Run as a script; stay quiet (and export the testable pieces) when required.
+if (require.main === module) {
+  main().catch(e => { console.error(e); process.exit(1); });
+}
+module.exports = { loadBadges, loadRepoConfig, CAPTION_CSS };

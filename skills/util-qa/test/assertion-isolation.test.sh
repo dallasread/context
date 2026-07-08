@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Behavioral test for the assertion-integrity guarantee: QA chrome (the caption
-# bar + Trusty mascot) lives in a CLOSED shadow root, so it is invisible to the
+# bar + corner badge) lives in a CLOSED shadow root, so it is invisible to the
 # page's own automation. Without that isolation a `see "X"` step — which writes
 # a caption label containing X — would match its own caption and could NEVER
 # fail. This drives run.js against a trivial static fixture (real browser) and

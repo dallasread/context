@@ -30,8 +30,8 @@
 // finding frames (nothing else is embedded or linked); --frames adds every
 // table row's frame.
 //
-// --heading replaces the default "### 👓 QA" heading line — pr-dry renders a
-// PR description's "## 👓 Preview" section from the same evidence this way.
+// --heading replaces the default "### 👓 QA" heading line — pr-dry takes over a
+// PR description's QA section, rendering it as "## 👓 QA" from the same evidence.
 //
 // --assets map.json: { "02-see.png": "https://github.com/user-attachments/assets/…", … }
 //   keyed by frame basename. A missing entry renders that row without an image.

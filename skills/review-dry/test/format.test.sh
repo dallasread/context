@@ -130,12 +130,27 @@ chk "pass run: checklist only"           "! has '$PCMT' '<table>'"
 chk "pass run: no warning glyph"         "! has '$PCMT' '⚠️'"
 chk "pass run: no video/script blocks"   "! has '$PCMT' '📜'"
 
-# --- custom heading (--heading, for pr-dry's Preview section) ---------------
-node "$FMT" "$PRUN" --heading '## 👓 Preview' >/dev/null 2>&1
-chk "heading: custom heading used"       "has '$PCMT' '## 👓 Preview'"
+# --- custom heading (--heading, for pr-dry taking over the PR's QA section) --
+# pr-dry renders the QA block as a top-level "## 👓 QA" PR section — same label
+# as the review comment's "### 👓 QA", one heading level up.
+node "$FMT" "$PRUN" --heading '## 👓 QA' >/dev/null 2>&1
+chk "heading: custom heading used"       "has '$PCMT' '## 👓 QA'"
 chk "heading: default heading absent"    "! has '$PCMT' '### 👓 QA'"
-node "$FMT" "$PRUN" --frames --heading '## 👓 Preview' >/dev/null 2>&1
-chk "heading: works with --frames too"   "has '$PCMT' '## 👓 Preview'"
+node "$FMT" "$PRUN" --frames --heading '## 👓 QA' >/dev/null 2>&1
+chk "heading: works with --frames too"   "has '$PCMT' '## 👓 QA'"
+
+# --- pr-dry take-over parity: the PR's "## 👓 QA" section IS the review comment's
+#     "### 👓 QA" block with only the heading level swapped. Render both from the
+#     SAME evidence and prove the bodies (everything below the heading line) are
+#     byte-identical — so a PR's QA section always matches the review's QA block.
+node "$FMT" "$FRUN" --assets "$TMP/assets.json" \
+  --video "https://github.com/user-attachments/assets/VIDURL" --scenario "$TMP/scenario.md" >/dev/null 2>&1
+tail -n +2 "$FRUN/comment.md" > "$TMP/qa-body.txt"
+node "$FMT" "$FRUN" --heading '## 👓 QA' --assets "$TMP/assets.json" \
+  --video "https://github.com/user-attachments/assets/VIDURL" --scenario "$TMP/scenario.md" >/dev/null 2>&1
+tail -n +2 "$FRUN/comment.md" > "$TMP/pr-body.txt"
+chk "parity: PR render leads with its heading" "node -e \"process.exit(require('fs').readFileSync('$FRUN/comment.md','utf8').startsWith('## 👓 QA\n')?0:1)\""
+chk "parity: PR QA body == review QA body"      "diff -q '$TMP/qa-body.txt' '$TMP/pr-body.txt' >/dev/null"
 
 # --- escaping: caption with HTML metacharacters (video checklist) -----------
 XRUN="$TMP/xrun"; mkdir -p "$XRUN"
