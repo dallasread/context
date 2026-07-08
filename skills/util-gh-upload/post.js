@@ -19,7 +19,10 @@ const { parseArgs } = require('node:util');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { chromium } = require('playwright');
+// Playwright is resolved from the util-util-qa skill's install — the util-gh-upload skill has
+// no npm footprint of its own. qa.sh self-heals that install on every qa run;
+// if this resolve fails, run: cd ~/.claude/skills/util-qa && npm install
+const { chromium } = require(require.resolve('playwright', { paths: [path.join(__dirname, '..', 'util-qa')] }));
 const PROFILE_DIR = path.join(__dirname, 'gh-profile');
 
 const UPLOAD_TIMEOUT_MS = 120_000;

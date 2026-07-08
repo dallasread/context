@@ -1,11 +1,11 @@
 ---
-name: review
-description: Pull Request Review with mandatory live QA. Check out the branch, review the diff through four lenses, run the qa skill for video evidence, and draft a comment from the canonical template (verdict lead, tagged Top points, 👓 QA checkpoint table, collapsed video/script) for the user to review. Nothing is posted until the user reads the draft and explicitly asks. Use when asked to review a PR or branch.
+name: review-dry
+description: Dry pull request review — the deliverable is a DRAFT comment, never a post. Check out the branch, review the diff through four lenses, run the util-qa skill for video evidence, and draft the comment from the canonical template (verdict lead, tagged Top points, 👓 QA section — video by default, frame-by-frame table on request). Posting, and the uploads it needs, happen only after the user reads the draft and explicitly asks. Use when asked to review a PR or branch.
 ---
 
-# review
+# review-dry
 
-Full-template pull request review with live QA evidence. You (Claude) check out the branch, review the diff through the four lenses below, run the qa skill for frame-backed evidence, and **draft a comment** from the canonical template. The drafted comment is the review's endpoint: the user always reads the draft before anything is posted. Posting is a separate step that runs only when the user, having read the draft, explicitly asks for it.
+Full-template pull request review with live QA evidence. You (Claude) check out the branch, review the diff through the four lenses below, run the util-qa skill for frame-backed evidence, and **draft a comment** from the canonical template. The drafted comment is the review's endpoint: the user always reads the draft before anything is posted. Posting is a separate step that runs only when the user, having read the draft, explicitly asks for it.
 
 ## Workflow
 
@@ -13,7 +13,7 @@ Full-template pull request review with live QA evidence. You (Claude) check out 
 
 2. **Review the diff through the four lenses** (General, Development, UI and UX, Marketing — see below) and output those sections in chat. They are the user's working view of the review and are never pasted into the drafted comment. **Never run linters or the test suite during a review** — CI owns those. Answer "are tests complete and passing?" by reading the specs in the diff and the PR's CI status (`gh pr checks`), not by executing anything locally.
 
-3. **Run live QA — mandatory, via a subagent running the qa skill** (`~/.claude/skills/qa/SKILL.md`). **You own defining what QA must prove; qa owns driving the app.** You have already read the diff — do not make the subagent re-derive it. Author a **QA brief** in the subagent's prompt containing: (a) each observable behavior the change claims, as a plain-language checkpoint to prove; (b) the negative/regression assertions to include (what must NOT happen, stated as the positive end-state to assert); (c) the pages/routes involved and any useful selectors you saw in the diff; (d) whether this is refactoring work — if so qa proves equivalence against the baseline, so name the baseline ref (e.g. `origin/main`) rather than leaving it to investigate; (e) the observable lens questions (UI and UX, Marketing, below) as its frame-review checklist. Do NOT dictate qa's mechanics (worktree prep, boot, auth, step syntax) — the skill owns those. "The tests pass" / "the rendered HTML looks right" is NOT a substitute; the ONLY acceptable reason to skip is that the app genuinely cannot be booted here, and then you MUST say so explicitly and state what you did instead.
+3. **Run live QA — mandatory, via a subagent running the util-qa skill** (`~/.claude/skills/util-qa/SKILL.md`). **You own defining what QA must prove; qa owns driving the app.** You have already read the diff — do not make the subagent re-derive it. Author a **QA brief** in the subagent's prompt containing: (a) each observable behavior the change claims, as a plain-language checkpoint to prove; (b) the negative/regression assertions to include (what must NOT happen, stated as the positive end-state to assert); (c) the pages/routes involved and any useful selectors you saw in the diff; (d) whether this is refactoring work — if so qa proves equivalence against the baseline, so name the baseline ref (e.g. `origin/main`) rather than leaving it to investigate; (e) the observable lens questions (UI and UX, Marketing, below) as its frame-review checklist. Do NOT dictate qa's mechanics (worktree prep, boot, auth, step syntax) — the skill owns those. "The tests pass" / "the rendered HTML looks right" is NOT a substitute; the ONLY acceptable reason to skip is that the app genuinely cannot be booted here, and then you MUST say so explicitly and state what you did instead.
 
 4. **Keep QA findings and code findings in separate, labelled buckets** (see Findings and provenance below), and chase any `forReview` leads QA handed you as part of your code review.
 
@@ -107,14 +107,14 @@ If the pull request is facing customers, review it from the perspective of poten
 
 ### 👓 QA
 
-<format.js output verbatim: the k/K count line, the checkpoint table, and the collapsed 🎬 Video & QA script block>
+<format.js output verbatim — video style by default; --frames when a frame-by-frame review was requested>
 ```
 
 Rules:
 
 - **The lead** is one line: a verdict ("Requesting changes" / "Looks good" / "Comment"), the tally, and `verified against <sha>` linking the commit (`git rev-parse --short HEAD`). Always include the sha — a pasted comment freezes while the PR moves on, so a reader must know which tree the evidence covers.
 - **Top points** is the single merged, prioritized list — max four, ELI5. Every point carries a provenance tag: `[QA · <severity>]` for frame-backed observations (from `findings.json` and failed checkpoints), `[code · <severity>]` for diff findings (with `file:line`). Severities: blocker | major | minor | nit. Every `findings.json` entry and every failed checkpoint must surface here; if more than four points survive triage, the four most severe go in, the tally says so, and the rest stay in the chat review. The refactor suggestion, when it clears the bar, takes a `[code · nit]` slot.
-- **👓 QA** is `format.js` output, untouched — it emits the heading, count line, table (failing rows first, `<details open>`, ⚠️), and the single collapsed 🎬 Video & QA script block. Never hand-edit the table.
+- **👓 QA** is `format.js` output, untouched, in one of two styles. **Video (the default):** count line, a terse ✅/⚠️ checkpoint checklist, the failing checkpoint's frame embedded only when there is one, the video inline, the QA script collapsed. **Frame-by-frame (`--frames`):** the checkpoint table (failing rows first, `<details open>`, ⚠️) with the collapsed 🎬 Video & QA script block — this is the style the approved mock shows. Use `--frames` only when the user asks for a frame-by-frame review; never hand-edit either form.
 - **If QA was skipped** (the app genuinely could not boot — the only sanctioned reason), the `### 👓 QA` section instead contains one paragraph saying so and what you did instead. It is never silently omitted, and no `[QA · …]` tags may appear in Top points.
 - Never blur provenance: a QA symptom is not a proven code cause, and a code-read finding is not a QA observation.
 
@@ -128,25 +128,25 @@ QA is a pure evidence producer — it hands you an evidence dir (`findings.json`
 
 ## Posting — only after the user reads the draft and asks
 
-Only then does the upload/post flow run, using the tooling in this skill's directory (`format.js` renders the 👓 QA block with live asset URLs; `post.js` uploads frames + video by driving a logged-in GitHub browser profile). **Uploading already publishes the files to GitHub-hosted URLs, so ask before running `post.js` — every single time, no standing consent** — even though the user already asked you to post, confirm before the upload actually publishes.
+Only then does the upload/post flow run. This skill's `format.js` renders the 👓 QA block with live asset URLs; the actual uploading belongs to the **util-gh-upload skill** (`~/.claude/skills/util-gh-upload/SKILL.md`), which owns the browser profile, the consent rule (uploading publishes — confirm every time), and the failure fallbacks. Follow its instructions for login and upload.
 
 ```
-# 1. one-time interactive login (headed), if not already logged in
-node ~/.claude/skills/review/post.js --login
+# 1. list the frames the comment needs (always includes every frame a
+#    findings.json entry cites, so Top points can link their screenshots;
+#    the default video style adds only the failing frame, --frames adds all).
+#    Use the SAME --frames flag here as in step 3, or uploads and links drift.
+node ~/.claude/skills/review-dry/format.js <qa-dir> --list-frames > /tmp/frames.txt
 
-# 2. upload the frames the comment needs + the video (one browser session);
-#    prints a basename->URL JSON map. --list-frames includes every frame a
-#    findings.json entry cites, so Top points can link their screenshots.
-node ~/.claude/skills/review/format.js <qa-dir> --list-frames > /tmp/frames.txt
-node ~/.claude/skills/review/post.js $(cat /tmp/frames.txt) <qa-dir>/qa.mp4 \
-     --repo <owner/repo> --pr <N> --json > <qa-dir>/assets.json
+# 2. upload frames + video per the util-gh-upload skill (confirm first, every time):
+#    node ~/.claude/skills/util-gh-upload/post.js $(cat /tmp/frames.txt) <qa-dir>/qa.mp4 \
+#         --repo <owner/repo> --pr <N> --json > <qa-dir>/assets.json
 
 # 3. render the 👓 QA block (--scenario embeds the repro script)
-node ~/.claude/skills/review/format.js <qa-dir> \
+node ~/.claude/skills/review-dry/format.js <qa-dir> \
      --assets <qa-dir>/assets.json \
      --video "$(node -e 'console.log(require(process.argv[1])["qa.mp4"]||"")' <qa-dir>/assets.json)" \
      --scenario <qa-dir>/scenario.md
 # writes <qa-dir>/comment.md — the ### 👓 QA block only
 ```
 
-Then prepend the authored lead + Top points (per the approved draft) to `comment.md`, and post it as one review comment: `gh pr comment <N> --body-file <qa-dir>/comment.md`. The posted comment must match the draft the user approved — if anything material changed between draft and post (new findings, a new commit on the branch), re-draft and show the user again instead of silently posting the difference. On `NOT_LOGGED_IN`, ask the user to run the `--login` command above (it opens a real browser, including 2FA). If the upload fails (a GitHub DOM change breaks it — it fails loudly), fall back to giving the user the file paths for manual drag-drop.
+Then prepend the authored lead + Top points (per the approved draft) to `comment.md`, and post it as one review comment: `gh pr comment <N> --body-file <qa-dir>/comment.md`. The posted comment must match the draft the user approved — if anything material changed between draft and post (new findings, a new commit on the branch), re-draft and show the user again instead of silently posting the difference.

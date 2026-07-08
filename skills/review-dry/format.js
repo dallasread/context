@@ -2,12 +2,17 @@
 // Turn a completed QA run into the "### 👓 QA" block of a review comment.
 //
 // Reads <evidence-dir>/steps.json (written by run.js) plus a map of uploaded
-// frame -> user-attachments URL, and emits <evidence-dir>/comment.md: the QA
-// heading, the k/K count line, a compact checkpoint table whose "what it
-// proves" cells expand (<details>) to the screenshot, and one collapsed
-// "🎬 Video & QA script" block. Frames load only when a row is opened.
+// frame -> user-attachments URL, and emits <evidence-dir>/comment.md in one of
+// two styles:
+//   VIDEO (default) — the QA heading, the k/K count line, a terse ✅/⚠️
+//   checkpoint checklist, the failing checkpoint's frame (only when there is
+//   one), the video inline, and the QA script collapsed. The video is the
+//   review; frames stay out of the comment.
+//   FRAMES (--frames) — the per-checkpoint table whose "what it proves" cells
+//   expand (<details>) to the screenshot, plus one collapsed "🎬 Video & QA
+//   script" block. For when a frame-by-frame review is explicitly wanted.
 //
-// This is deliberately NOT the whole comment: the review skill authors the
+// This is deliberately NOT the whole comment: the review-dry skill authors the
 // lead (verdict + "verified against <sha>") and the tagged Top points — which
 // is where findings (findings.json + the auto assertion-failure) surface —
 // and prepends them to this output. format.js never renders findings; it only
@@ -18,8 +23,12 @@
 // (b) opening its <details>, and (c) a ⚠️ glyph (emoji carry their own color).
 // The table is raw HTML because markdown pipe tables cannot nest <details>.
 //
-//   node format.js <evidence-dir> [--assets map.json] [--video <url>] [--scenario <path>]
-//   node format.js <evidence-dir> --list-frames   # print frames to upload, then exit
+//   node format.js <evidence-dir> [--frames] [--assets map.json] [--video <url>] [--scenario <path>]
+//   node format.js <evidence-dir> [--frames] --list-frames   # print frames to upload, then exit
+//
+// --list-frames matches the style: video mode names only the failing frame +
+// finding frames (nothing else is embedded or linked); --frames adds every
+// table row's frame.
 //
 // --assets map.json: { "02-see.png": "https://github.com/user-attachments/assets/…", … }
 //   keyed by frame basename. A missing entry renders that row without an image.
@@ -56,17 +65,18 @@ function selectRows(manifest) {
   return { primary, failing, hasCheckpoints };
 }
 
-// Absolute paths of the frames that must be uploaded for this comment: one per
-// row that has a screenshot, plus the failing step's frame, plus every frame a
-// finding cites (findings render as the review skill's Top points, which link
-// these frames). Reconstructed from the evidence dir so the list is stable
-// regardless of where run.js wrote from.
+// Absolute paths of the frames that must be uploaded for this comment: the
+// failing step's frame plus every frame a finding cites (findings render as
+// the review-dry skill's Top points, which link these frames), and — in --frames
+// mode only — one per table row that has a screenshot. Reconstructed from the
+// evidence dir so the list is stable regardless of where run.js wrote from.
 // @param {object} manifest parsed steps.json
 // @param {string} dir evidence directory
+// @param {boolean} frames true for the frame-by-frame table style
 // @return {string[]} frame paths under <dir>/frames
-function framesToUpload(manifest, dir) {
+function framesToUpload(manifest, dir, frames) {
   const { primary, failing } = selectRows(manifest);
-  const withFrame = [...primary];
+  const withFrame = frames ? [...primary] : [];
   if (failing && !withFrame.includes(failing)) withFrame.push(failing);
   const names = new Set(withFrame.filter((s) => s.frame).map((s) => path.basename(s.frame)));
   for (const f of collectFindings(manifest, dir)) if (f.frame) names.add(f.frame);
@@ -78,11 +88,11 @@ function framesToUpload(manifest, dir) {
 //     blocker, backed by its frame. run.js already knows this.
 //   - OBSERVED (kind "observation"): defects the reviewing agent saw in the
 //     frames that no assertion caught, authored into <dir>/findings.json.
-// The merged list is NOT rendered into comment.md — the review skill surfaces
+// The merged list is NOT rendered into comment.md — the review-dry skill surfaces
 // findings as its tagged Top points. Here it only feeds framesToUpload, so a
 // finding's screenshot is uploaded and linkable from a Top point.
 // A finding's `forReview` lead (a suspected code cause) is deliberately NOT
-// returned here — it is a handoff for the review skill, not a QA claim, so it
+// returned here — it is a handoff for the review-dry skill, not a QA claim, so it
 // never reaches the posted QA comment. QA only states what a frame can show.
 // @param {object} manifest parsed steps.json
 // @param {string} dir evidence directory (holds findings.json)
@@ -137,10 +147,10 @@ function renderRow({ num, ok, caption, url, detail }) {
 
 // Assemble the "### 👓 QA" block markdown.
 // @param {object} manifest parsed steps.json
-// @param {object} opts { assets, video, scenario }
+// @param {object} opts { assets, video, scenario, frames }
 // @return {string} comment markdown ending in a single newline
 function build(manifest, opts) {
-  const { assets = {}, video, scenario } = opts;
+  const { assets = {}, video, scenario, frames = false } = opts;
   const { primary, failing, hasCheckpoints } = selectRows(manifest);
   const K = primary.length;
   const passed = primary.filter((s) => s.ok !== false).length;
@@ -171,22 +181,44 @@ function build(manifest, opts) {
     out.push(`**${passed} / ${K} ${unit} passed** · the run stopped at \`${failing.caption}\`.`);
   }
   out.push('');
-  out.push(
-    '<table>',
-    '  <thead>',
-    '    <tr><th align="center">#</th><th align="center">Result</th><th align="left">What it proves — expand for the frame</th></tr>',
-    '  </thead>',
-    '  <tbody>',
-    rows.join('\n'),
-    '  </tbody>',
-    '</table>',
-    '',
-  );
-  if (video || scenario) {
-    out.push('<details>', '<summary>🎬 Video & QA script</summary>', '');
-    if (video) out.push(video, '');
-    if (scenario) out.push('```markdown', scenario.replace(/```/g, '` ``').trimEnd(), '```', '');
-    out.push('</details>', '');
+  if (frames) {
+    out.push(
+      '<table>',
+      '  <thead>',
+      '    <tr><th align="center">#</th><th align="center">Result</th><th align="left">What it proves — expand for the frame</th></tr>',
+      '  </thead>',
+      '  <tbody>',
+      rows.join('\n'),
+      '  </tbody>',
+      '</table>',
+      '',
+    );
+    if (video || scenario) {
+      out.push('<details>', '<summary>🎬 Video & QA script</summary>', '');
+      if (video) out.push(video, '');
+      if (scenario) out.push('```markdown', scenario.replace(/```/g, '` ``').trimEnd(), '```', '');
+      out.push('</details>', '');
+    }
+    return out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+  }
+
+  // VIDEO style: a terse checklist in run order (the failing plumbing step,
+  // when the break was pre-checkpoint, is appended so it is never hidden),
+  // the failing frame as the one embedded image, the video inline (GitHub
+  // renders a bare user-attachments URL as a player), the script collapsed.
+  const listSteps = [...primary];
+  if (failing && !listSteps.includes(failing)) listSteps.push(failing);
+  for (const s of listSteps) {
+    const bad = s.ok === false;
+    const err = bad && s.error ? ` — \`${s.error}\`` : '';
+    out.push(`- ${bad ? FLAG_ICON : PASS_ICON} ${esc(s.caption)}${err}`);
+  }
+  out.push('');
+  const failUrl = failing && failing.frame ? assets[path.basename(failing.frame)] : undefined;
+  if (failUrl) out.push(`<img alt="${esc(failing.caption)}" src="${esc(failUrl)}">`, '');
+  if (video) out.push(video, '');
+  if (scenario) {
+    out.push('<details>', '<summary>📜 QA script</summary>', '', '```markdown', scenario.replace(/```/g, '` ``').trimEnd(), '```', '', '</details>', '');
   }
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
 }
@@ -197,6 +229,7 @@ function main() {
       assets: { type: 'string' },
       video: { type: 'string' },
       scenario: { type: 'string' },
+      frames: { type: 'boolean', default: false },
       'list-frames': { type: 'boolean', default: false },
     },
     allowPositionals: true,
@@ -204,19 +237,19 @@ function main() {
   });
   const dir = positionals[0];
   if (!dir) {
-    console.error('Usage: format.js <evidence-dir> [--assets map.json] [--video <url>] [--scenario <path>] [--list-frames]');
+    console.error('Usage: format.js <evidence-dir> [--frames] [--assets map.json] [--video <url>] [--scenario <path>] [--list-frames]');
     process.exit(1);
   }
   const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'steps.json'), 'utf8'));
 
   if (values['list-frames']) {
-    for (const f of framesToUpload(manifest, dir)) console.log(f);
+    for (const f of framesToUpload(manifest, dir, values.frames)) console.log(f);
     return;
   }
 
   const assets = values.assets ? JSON.parse(fs.readFileSync(values.assets, 'utf8')) : {};
   const scenario = values.scenario ? fs.readFileSync(values.scenario, 'utf8') : null;
-  const md = build(manifest, { assets, video: values.video, scenario });
+  const md = build(manifest, { assets, video: values.video, scenario, frames: values.frames });
   const outPath = path.join(dir, 'comment.md');
   fs.writeFileSync(outPath, md);
   console.log(outPath);

@@ -1,3 +1,8 @@
+---
+name: pickup
+description: Pick up a ticket or feature description for implementation. Plan first - ask questions, agree on entrypoint, preconditions, and side-effects - then create a worktree off a fresh main to implement in. Use when handed a ticket or a description of a thing to build.
+---
+
 I'm gonna give you a description of a thing to implement (or a ticket). Use the proper issue template.
 
 Let's plan it out.

@@ -1,0 +1,45 @@
+# Ignore everything by default
+*
+
+# The ignore policy itself must travel with the repo
+!.gitignore
+
+# Allow markdown files
+!*.md
+
+# Allow commands directory and its contents
+!commands
+!commands/**
+
+# Allow guides directory and its contents
+!guides
+!guides/**
+
+# Skills are PRIVATE BY DEFAULT (this repo is public). Publishing a skill
+# is an explicit act: add it to the whitelist below. A skill not listed
+# here never leaves this machine — e.g. skills/roundtable stays private.
+!skills
+skills/*
+!skills/util-qa
+!skills/util-qa/**
+!skills/review-dry
+!skills/review-dry/**
+!skills/util-gh-upload
+!skills/util-gh-upload/**
+!skills/pr-dry
+!skills/pr-dry/**
+!skills/pickup
+!skills/pickup/**
+!skills/util-cqrs-ruby
+!skills/util-cqrs-ruby/**
+!skills/util-cqrs-js
+!skills/util-cqrs-js/**
+
+# Even in whitelisted skills: never secrets, browser profiles, or deps
+skills/*/credentials.json
+skills/*/cookies.json
+skills/*/gh-profile
+skills/*/node_modules
+skills/*/profiles
+
+.DS_Store

@@ -1,9 +1,9 @@
 ---
-name: qa
-description: Prove a UI change works by driving the running app in a headless browser from a scripted scenario, recording a video of the session plus per-step screenshots as evidence. Use when asked to QA, verify, or demonstrate that a change works in the real app, and as the live-QA step of /review. Assertions (`expect` steps) make the run pass/fail — a green run is proof, not vibes.
+name: util-qa
+description: Prove a UI change works by driving the running app in a headless browser from a scripted scenario, recording a video of the session plus per-step screenshots as evidence. A utility skill: normally invoked by the review-dry and pr-dry skills rather than on its own, though it also serves direct asks to QA, verify, or demonstrate that a change works in the real app. Assertions (`expect` steps) make the run pass/fail — a green run is proof, not vibes.
 ---
 
-# qa
+# util-qa
 
 Scripted browser QA with video evidence. You (Claude) derive a scenario from the change under review, run it against the booted app, review the evidence yourself, and report the verdict with the video path.
 
@@ -32,25 +32,25 @@ Scripted browser QA with video evidence. You (Claude) derive a scenario from the
 4. **Run it from the app directory:**
 
    ```
-   ~/.claude/skills/qa/qa.sh <evidence-dir>/scenario.md <evidence-dir>
+   ~/.claude/skills/util-qa/qa.sh <evidence-dir>/scenario.md <evidence-dir>
    ```
 
-   qa.sh picks a free port, runs the repo's configured `serve` command, waits for readiness, runs the scenario, and (by default) kills the server on exit — pass, fail, error, or interrupt. There is NO stack detection: the boot comes from the repo's REQUIRED QA config (`profiles/<repo>.json`, see below), and a repo without one fails with `QA_CONFIG_MISSING`. A command after `--` explicitly overrides `serve` for one-off runs; commands run with `$PORT` exported. Server (and any chained build) output lands in `<evidence-dir>/server.log`. To run against an already-running server instead: `node ~/.claude/skills/qa/run.js <scenario.md> --out <dir> --base <url> --repo <name>`.
+   qa.sh picks a free port, runs the repo's configured `serve` command, waits for readiness, runs the scenario, and (by default) kills the server on exit — pass, fail, error, or interrupt. There is NO stack detection: the boot comes from the repo's REQUIRED QA config (`profiles/<repo>.json`, see below), and a repo without one fails with `QA_CONFIG_MISSING`. A command after `--` explicitly overrides `serve` for one-off runs; commands run with `$PORT` exported. Server (and any chained build) output lands in `<evidence-dir>/server.log`. To run against an already-running server instead: `node ~/.claude/skills/util-qa/run.js <scenario.md> --out <dir> --base <url> --repo <name>`.
 
    **Iterating? Keep the server warm.** A fresh boot rebuilds assets and boots the framework every run (tens of seconds). For repeated runs against the same worktree, add `--keep`: the server is left running and recorded, and later runs REUSE it — skipping the whole boot, so they start in well under a second and the only cost is the scenario itself. Reuse serves the assets the server booted with; framework dev-reload still picks up backend/view edits live, but a **JS/CSS source** change needs `--fresh` (stop, rebuild, reboot). `--stop` tears this worktree's warm server down. State is keyed by the git worktree root, so warm servers across parallel worktrees each get their own port and never collide.
 
    ```
-   ~/.claude/skills/qa/qa.sh <dir>/scenario.md <dir> --keep    # boot once, leave warm
-   ~/.claude/skills/qa/qa.sh <dir>/scenario.md <dir> --keep    # again → reuses, ~instant
-   ~/.claude/skills/qa/qa.sh <dir>/scenario.md <dir> --fresh   # rebuild assets + reboot (frontend changed)
-   ~/.claude/skills/qa/qa.sh --stop                            # done — kill the warm server
+   ~/.claude/skills/util-qa/qa.sh <dir>/scenario.md <dir> --keep    # boot once, leave warm
+   ~/.claude/skills/util-qa/qa.sh <dir>/scenario.md <dir> --keep    # again → reuses, ~instant
+   ~/.claude/skills/util-qa/qa.sh <dir>/scenario.md <dir> --fresh   # rebuild assets + reboot (frontend changed)
+   ~/.claude/skills/util-qa/qa.sh --stop                            # done — kill the warm server
    ```
 
    Evidence dir convention: `<project>/tmp/qa/<branch-name>/` (gitignored). The runner copies the scenario there, records `qa.mp4`, saves `frames/NN-<action>.png` after every step, and writes `steps.json` with the PASS/FAIL verdict. Exit 0 = all steps passed.
 
 5. **Review the evidence yourself — thoroughly, and record what you find.** Read the frame PNGs and check the UI actually looks right — assertions prove presence, not layout. A passing run with a broken-looking frame is a FAIL; say so. Look beyond what the assertions covered for bugs and inconsistencies: misaligned or overflowing layout, wrong/placeholder copy, stale or duplicated data, an off-by-one count, a control that should be disabled but isn't. If the caller passed review questions (see step 1), re-ask the observable ones of each frame — awkward long-data rendering, a lost form value, a missing CTA, unclear next steps are all findings. **Write every defect you spot into `<evidence-dir>/findings.json`** (schema below) — that file, not prose in your reply, is QA's structured list of issues. The failed checkpoint is already a finding automatically; `findings.json` is for the things no assertion caught.
 
-6. **Report**: verdict, what was exercised, the issues found, the evidence dir, the video path, and any frames showing problems. QA stops at evidence — it does **not** format or post a PR comment. Hand the evidence dir (`findings.json`, `verdict`, `steps.json`, `qa.mp4`, `frames/`) to the caller; assembling and posting the PR comment is the **review skill's** job (`~/.claude/skills/review/`, see its `format.js`/`post.js`). When run standalone (not under `/review`), just report the verdict and paths and let the user decide what to do with them.
+6. **Report**: verdict, what was exercised, the issues found, the evidence dir, the video path, and any frames showing problems. QA stops at evidence — it does **not** format or post a PR comment. Hand the evidence dir (`findings.json`, `verdict`, `steps.json`, `qa.mp4`, `frames/`) to the caller; assembling the PR comment is the **review-dry skill's** job (`~/.claude/skills/review-dry/`), and uploading evidence is the **gh-upload skill's** (`~/.claude/skills/util-gh-upload/`). When run standalone (not under `/review-dry`), just report the verdict and paths and let the user decide what to do with them.
 
 ## Findings — what QA is allowed to claim
 
@@ -67,9 +67,9 @@ Findings live in `<evidence-dir>/findings.json`, an array the reviewing agent au
 - `severity` — `blocker` | `major` | `minor` | `nit`. A failed assertion is an automatic `blocker` (derived from `steps.json`); don't restate it here.
 - `summary` — one observed sentence. Describe the symptom on screen, not a guess about the code.
 - `frame` — the frame basename that shows it (from `frames/`). This is the evidence; include it.
-- `forReview` *(optional)* — a lead handed to the review skill (a suspected code cause). This is the ONE sanctioned place to record a code suspicion, and it is deliberately kept OUT of the posted QA comment — it exists so a reviewer can chase it, not so QA can claim it. The review skill's formatter never renders it.
+- `forReview` *(optional)* — a lead handed to the review-dry skill (a suspected code cause). This is the ONE sanctioned place to record a code suspicion, and it is deliberately kept OUT of the posted QA comment — it exists so a reviewer can chase it, not so QA can claim it. The review skill's formatter never renders it.
 
-`findings.json` is QA's whole output contract for issues: an array of observations, each backed by a frame. The review skill merges these with the run's automatic assertion-failure finding into its comment's tagged, prioritized **Top points** (`[QA · <severity>]`, each linking its screenshot — the review formatter's `--list-frames` includes every frame a finding cites so those links work). How that list is rendered and posted lives with the review skill, not here.
+`findings.json` is QA's whole output contract for issues: an array of observations, each backed by a frame. The review skill merges these with the run's automatic assertion-failure finding into its comment's tagged, prioritized **Top points** (`[QA · <severity>]`, each linking its screenshot — the review formatter's `--list-frames` includes every frame a finding cites so those links work). How that list is rendered and posted lives with the review-dry skill, not here.
 
 ## Scenario format
 
@@ -123,7 +123,7 @@ The JSON takes `variables` (values referenced in steps as `$NAME` — credential
 
 **Credentials never appear in evidence.** Scenarios must not contain credentials (auto-login makes that unnecessary), and as a backstop the runner redacts the configured email/password values from everything it emits — captions, steps.json, console output, and the scenario copy in the evidence dir — so posted QA evidence cannot leak them. Note the login itself can appear on camera when a session was stale (password fields are browser-masked); rerun for a login-free recording if that matters.
 
-Manual fallback if form login ever breaks: `node ~/.claude/skills/qa/save-cookie.js --host <host:port> --name _dnsimple_session --value '<paste>'`.
+Manual fallback if form login ever breaks: `node ~/.claude/skills/util-qa/save-cookie.js --host <host:port> --name _dnsimple_session --value '<paste>'`.
 
 If the app interrupts login with a forced password-upgrade prompt, it is sanctioned to delete the dev user's password history rows in the dev database (rails runner) so the existing credentials keep working — that is the ONLY mutation of pre-existing dev data ever allowed.
 
@@ -131,7 +131,7 @@ Use `--no-auth` for logged-out flows (login page, marketing pages). Never fabric
 
 ## Posting evidence to GitHub
 
-Not QA's job. Formatting the evidence into a PR comment and uploading it lives in the **review skill** (`~/.claude/skills/review/`, which owns `format.js` + `post.js` + the GitHub browser profile). QA produces the evidence dir and stops; `/review` picks it up from there. If you are running QA standalone and want to post, invoke the review skill's tooling directly — see `~/.claude/skills/review/` — and, as always, ask the user before uploading or posting, every single time.
+Not QA's job. Formatting the evidence into a PR comment lives in the **review-dry skill** (`~/.claude/skills/review-dry/`, which owns `format.js` and the comment template); uploading lives in the **util-gh-upload skill** (`~/.claude/skills/util-gh-upload/`, which owns `post.js`, the browser profile, and the consent rule). QA produces the evidence dir and stops; `/review-dry` picks it up from there. If you are running QA standalone and want to post, follow those two skills — and, as always, ask the user before uploading or posting, every single time.
 
 ## Booting any repo
 
@@ -139,7 +139,7 @@ This skill's engine carries no repo-specific knowledge and does no guessing: **e
 
 - **First time on a repo: author its config.** Read the repo's README/CONTRIBUTING/CLAUDE.md to learn the dev server and asset build, then write `profiles/<repo>.json` (see "Creating a per-repo config" below). This happens once, deliberately — never inferred at run time.
 - **`profiles/<repo>.md`** (optional but encouraged) holds the human facts: why the boot is what it is, dev data caveats, scenario tips. Check it before writing scenarios.
-- **Fresh worktree**: `~/.claude/skills/qa/setup-worktree.sh <worktree-path>` copies the main checkout's own gitignored files (minus universal junk: dependency installs, logs, caches, editor state) — repo-agnostic by construction. Then install dependencies; the config's `build` handles assets on each run.
+- **Fresh worktree**: `~/.claude/skills/util-qa/setup-worktree.sh <worktree-path>` copies the main checkout's own gitignored files (minus universal junk: dependency installs, logs, caches, editor state) — repo-agnostic by construction. Then install dependencies; the config's `build` handles assets on each run.
 
 ### Creating a per-repo config
 
@@ -191,4 +191,4 @@ Profiles are gitignored (machine-local, may reference private data). When a fact
 - Selector timeout — the selector is wrong or the feature is broken. Read the frame for that step before deciding which.
 - `NO_COOKIE` — no stored cookie for the host; save one or pass `--no-auth`.
 - ffmpeg missing — `brew install ffmpeg`.
-- Playwright missing — qa.sh self-heals this on every run: it preflight-installs the `playwright` npm package and the chromium browser binary (two SEPARATE installs, both living in `~/.claude/skills/qa`) before booting. You should not need to install anything by hand. Only if that auto-install itself fails (`PLAYWRIGHT_NPM_INSTALL_FAILED` / `PLAYWRIGHT_BROWSER_INSTALL_FAILED`) run it manually: `cd ~/.claude/skills/qa && npm install && npx playwright install chromium`. Do NOT install Playwright into the app worktree — the runner resolves it from the skill dir, not the app.
+- Playwright missing — qa.sh self-heals this on every run: it preflight-installs the `playwright` npm package and the chromium browser binary (two SEPARATE installs, both living in `~/.claude/skills/util-qa`) before booting. You should not need to install anything by hand. Only if that auto-install itself fails (`PLAYWRIGHT_NPM_INSTALL_FAILED` / `PLAYWRIGHT_BROWSER_INSTALL_FAILED`) run it manually: `cd ~/.claude/skills/util-qa && npm install && npx playwright install chromium`. Do NOT install Playwright into the app worktree — the runner resolves it from the skill dir, not the app.
