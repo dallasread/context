@@ -184,7 +184,15 @@ async function setCaption(page, text, state = 'running', checkpoint = false, bad
     if (!host) {
       host = document.createElement('div');
       host.id = '__qa_host__';
-      host.style.pointerEvents = 'none';
+      // Join the top layer: a manual popover paints above ALL normal-flow
+      // content regardless of z-index, so the caption can never be occluded by
+      // the app — not even by a native modal/popover, which a mere z-index:MAX
+      // box would lose to. Neutralise the popover UA chrome (centred bordered
+      // box) so only the fixed-position bar inside the shadow shows; manual =
+      // no focus grab, no light-dismiss, and pointer-events:none keeps clicks
+      // passing straight through to the app under test.
+      host.setAttribute('popover', 'manual');
+      host.style.cssText = 'pointer-events:none;inset:auto;margin:0;padding:0;border:0;width:0;height:0;background:transparent;overflow:visible';
       document.body.appendChild(host);
       shadow = host.attachShadow({ mode: 'closed' });
       host.__qaShadow = shadow;
@@ -193,6 +201,15 @@ async function setCaption(page, text, state = 'running', checkpoint = false, bad
     } else {
       shadow = host.__qaShadow;
     }
+    // (Re-)promote to the very top of the top layer on every update, so a modal
+    // the app opened since the last caption can't sit above us. Toggling moves
+    // us to the front; wrapped because showPopover throws if the API is absent
+    // (older engines) or the state is already what we asked for — either way,
+    // never fatal (the caption then falls back to its z-index behaviour).
+    try {
+      if (host.matches(':popover-open')) host.hidePopover();
+      host.showPopover();
+    } catch (e) { /* popover unsupported — z-index still applies */ }
     const cap = shadow.getElementById('cap');
     cap.className = checkpoint ? 'cp' : '';
     cap.style.background = bg;
@@ -665,4 +682,4 @@ async function main() {
 if (require.main === module) {
   main().catch(e => { console.error(e); process.exit(1); });
 }
-module.exports = { loadBadges, loadRepoConfig, CAPTION_CSS };
+module.exports = { loadBadges, loadRepoConfig, CAPTION_CSS, setCaption };
