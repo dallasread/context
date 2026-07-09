@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
 # Structural guard for the hot/cold documentation split.
 #
-# util-qa/SKILL.md is loaded IN FULL by every QA subagent on a cold start, so
-# per-run wall-clock pays for every byte of it. Onboarding a repo (writing a
-# profiles/<repo>.json, the config schema, the profile-markdown template) is a
-# ONCE-per-repo task, not a per-run one — it belongs off the hot path in
-# REFERENCE.md, reached only when QA_CONFIG_MISSING sends you there.
+# util-qa is a RUNNER, not an author: every QA subagent loads SKILL.md on a cold
+# start just to invoke qa.sh and report, so per-run wall-clock pays for every
+# byte of it. Two whole jobs are NOT the runner's per-run concern and belong off
+# that hot path, in REFERENCE.md:
+#   - AUTHORING a scenario (the harness, the verb vocabulary + its matching
+#     semantics, checkpoints, the evidence engine) — that is the CALLER's job
+#     (review-dry), which reaches into REFERENCE when it writes the .spec.js.
+#   - ONBOARDING a repo (writing profiles/<repo>.json, the config schema) — a
+#     ONCE-per-repo task, reached only when QA_CONFIG_MISSING sends you there.
 #
 # This test pins that split so a future edit can't silently (a) drag the
-# onboarding bulk back onto the hot path, (b) leave a dangling pointer, or
-# (c) move a RUNTIME-critical contract (the verb list, checkpoint syntax) OFF
-# the hot path where the runner author would stop seeing it. It greps files —
-# no browser, no boot — so it is cheap to keep green.
+# authoring spec or the onboarding bulk back onto the runner's hot path, (b)
+# leave a dangling pointer, or (c) strip the runner's own hot-path essentials
+# (the qa.sh invocation, the runner-not-author identity, the QA_CONFIG_MISSING
+# route) OFF the file the runner actually loads. It greps files — no browser, no
+# boot — so it is cheap to keep green.
 set -u
 
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -32,30 +37,35 @@ echo "# util-qa hot/cold documentation split"
 has "$SKILL" 'REFERENCE\.md' && ok "SKILL.md points to REFERENCE.md" \
   || no "SKILL.md points to REFERENCE.md"
 
+# --- authoring spec moved OFF the runner's hot path ------------------------
+# The runner never writes scenarios, so the verb vocabulary and its exact
+# matching semantics live in REFERENCE (where the author, review-dry, reads
+# them), NOT in the file the runner loads every run.
+has  "$REF"   'Authoring a scenario'  && ok "authoring spec lives in REFERENCE" \
+  || no "authoring spec lives in REFERENCE"
+has  "$REF"   'visit <path>'          && ok "verb vocabulary lives in REFERENCE" \
+  || no "verb vocabulary lives in REFERENCE"
+has  "$REF"   'Exact verb semantics'  && ok "verb semantics live in REFERENCE" \
+  || no "verb semantics live in REFERENCE"
+lacks "$SKILL" 'Exact verb semantics' && ok "verb semantics are NOT on the hot path" \
+  || no "verb semantics are NOT on the hot path"
+lacks "$SKILL" 'visit <path>'         && ok "verb vocabulary is NOT on the hot path" \
+  || no "verb vocabulary is NOT on the hot path"
+
 # --- onboarding bulk moved OFF the hot path --------------------------------
-# The per-repo config schema (the "serve" key example + the machine-config
-# heading) is onboarding, not per-run: it must live in REFERENCE, not SKILL.
 has  "$REF"   'Creating a per-repo config' && ok "config schema lives in REFERENCE" \
   || no "config schema lives in REFERENCE"
 lacks "$SKILL" 'Creating a per-repo config' && ok "config schema is NOT on the hot path" \
   || no "config schema is NOT on the hot path"
-lacks "$SKILL" '^## Booting any repo' && ok "onboarding section is NOT on the hot path" \
-  || no "onboarding section is NOT on the hot path"
 
-# --- runtime-critical contract STAYS on the hot path -----------------------
-# The subagent writes scenarios every run; the verb vocabulary and checkpoint
-# ( :: ) syntax must stay where it will read them, NOT get swept into REFERENCE.
-has "$SKILL" 'visit <path>' && ok "verb vocabulary stays on the hot path" \
-  || no "verb vocabulary stays on the hot path"
-has "$SKILL" 'Exact verb semantics' && ok "verb semantics stay on the hot path" \
-  || no "verb semantics stay on the hot path"
-has "$SKILL" 'Checkpoints' && ok "checkpoint syntax stays on the hot path" \
-  || no "checkpoint syntax stays on the hot path"
-
-# --- QA_CONFIG_MISSING still routes the reader to the reference ------------
-# The one moment onboarding matters mid-run is a missing config; the failure
-# path must name where the instructions now live.
-has "$SKILL" 'QA_CONFIG_MISSING' && ok "QA_CONFIG_MISSING still surfaced on hot path" \
+# --- the RUNNER's own hot-path essentials STAY in SKILL --------------------
+# What the runner does need every run: how to invoke, who it is, and the one
+# mid-run route into onboarding.
+has "$SKILL" 'runner, not an author' && ok "runner identity stays on the hot path" \
+  || no "runner identity stays on the hot path"
+has "$SKILL" 'qa\.sh'                && ok "qa.sh invocation stays on the hot path" \
+  || no "qa.sh invocation stays on the hot path"
+has "$SKILL" 'QA_CONFIG_MISSING'     && ok "QA_CONFIG_MISSING still surfaced on hot path" \
   || no "QA_CONFIG_MISSING still surfaced on hot path"
 
 echo "# pass $PASS / fail $FAIL"
