@@ -231,12 +231,20 @@ function loadCookies(host) {
 // standalone --base runs without --repo.
 function loadRepoConfig(repo, host) {
   if (repo) {
-    // A bare repo name resolves to profiles/<name>.json; a value ending in
-    // .json is loaded as a direct path — handy for standalone and model-free
-    // reproduce runs pointed at an arbitrary profile. qa.sh always passes a
+    // A bare repo name resolves to profiles/<name>.js (a JS module exporting
+    // { serve, variables, badge, login }); a value ending in .js/.json is loaded
+    // as a direct path — handy for standalone runs pointed at an arbitrary
+    // profile. require() handles both a JS module and a plain .json. A legacy
+    // .json profile is still honored when no .js exists. qa.sh always passes a
     // bare origin-remote name, so it never trips the path branch.
-    const f = /\.json$/i.test(repo) ? path.resolve(repo) : path.join(__dirname, 'profiles', `${repo}.json`);
-    if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, 'utf8'));
+    let f;
+    if (/\.(js|json)$/i.test(repo)) {
+      f = path.resolve(repo);
+    } else {
+      const stem = path.join(__dirname, 'profiles', repo);
+      f = fs.existsSync(`${stem}.js`) ? `${stem}.js` : `${stem}.json`;
+    }
+    if (fs.existsSync(f)) return require(f);
   }
   return hostEntry(CREDENTIALS_FILE, host);
 }
@@ -272,11 +280,12 @@ function redact(text) {
 // Log in by running the repo's "login" macro (steps like any scenario's),
 // then persist the fresh session into the skill's cookie store.
 async function formLogin(page, base, host, creds) {
-  if (!creds?.macros?.login) throw new Error('AUTH_FAILED and no "login" macro in the repo\'s profiles/<repo>.json (see SKILL.md)');
+  if (typeof creds?.login !== 'function') throw new Error('AUTH_FAILED and no login() function in the repo profile (profiles/<repo>.js — see REFERENCE.md)');
 
-  for (const step of macroSteps('login', creds)) {
-    await runStep(page, step, base);
-  }
+  // The profile's login() drives raw Playwright with the profile's `variables`
+  // injected as `vars` — never the scenario's auto-login `visit`, which would
+  // recurse. Credentials live in `variables` and reach login() only by name.
+  await creds.login({ page, base, vars: { ...(creds.variables || {}) } });
   await page.waitForURL((url) => !/\/login\b|\/sessions\/new\b/.test(url.pathname), { timeout: 15_000 })
       .catch(() => { throw new Error('LOGIN_FAILED — the "login" macro ended still on the login page; check the repo config'); });
 
@@ -347,75 +356,6 @@ async function runStep(page, step, base) {
   }
 }
 
-// A step becomes a CHECKPOINT — a human-meaningful moment tied to the change's
-// goal — when the author appends " :: <caption>" to the bullet. The part before
-// the first " :: " parses as the executable step (verb regexes are $-anchored,
-// so the suffix must be stripped before matching); the part after is free prose
-// shown prominently on camera and collected as the QA narrative. Steps without
-// it stay mechanical plumbing and display their raw syntax. The delimiter needs
-// surrounding spaces, so CSS pseudo-elements ("div::before") never collide.
-function splitCheckpoint(body) {
-  const i = body.indexOf(' :: ');
-  if (i === -1) return { stepBody: body, checkpoint: null };
-  return { stepBody: body.slice(0, i).trim(), checkpoint: body.slice(i + 4).trim() || null };
-}
-
-// Markdown scenario: prose and headings are free-form documentation; only
-// bullets with a recognized verb execute, and the bullet text is the caption.
-//   # <name>                          (first heading names the run)
-//   base: http://localhost:PORT
-//   - visit /a/1/domains/x.com/registration/new
-//   - see "Total due today"
-//   - see button "Register x.com for $"
-//   - see element td.total
-//   - click "Change contact"
-//   - click element #submit
-//   - fill #user_email with "a@b.com"
-//   - select #plan with "gold"
-//   - wait 500ms
-// An unrecognized bullet is an error, so a typo fails loudly instead of
-// silently skipping a step.
-const VERBS = [
-  [/^visit\s+(\S+)$/i, (m) => ({ action: 'goto', path: m[1] })],
-  [/^see button "(.+)"$/i, (m) => ({ action: 'expect', selector: `:is(input[type=submit][value*="${m[1]}"], button:has-text("${m[1]}"))` })],
-  [/^see element (.+)$/i, (m) => ({ action: 'expect', selector: m[1] })],
-  [/^see "(.+)"$/i, (m) => ({ action: 'expectText', text: m[1] })],
-  [/^click element (.+)$/i, (m) => ({ action: 'click', selector: m[1] })],
-  [/^click "(.+)"$/i, (m) => ({ action: 'click', selector: `text=${m[1]}` })],
-  [/^fill (.+?) with "(.*)"$/i, (m) => ({ action: 'fill', selector: m[1], value: m[2] })],
-  [/^select (.+?) with "(.*)"$/i, (m) => ({ action: 'select', selector: m[1], value: m[2] })],
-  [/^wait (\d+)ms$/i, (m) => ({ action: 'waitMs', ms: parseInt(m[1], 10) })],
-];
-
-function parseStep(body, context = null) {
-  const verb = VERBS.find(([re]) => re.test(body));
-  if (!verb) throw new Error(`UNRECOGNIZED_STEP "${body}"${context ? ` in macro "${context}"` : ''} — known verbs: visit, see, see button, see element, click, click element, fill, select, wait, run <macro>`);
-  return verb[1](body.match(verb[0]));
-}
-
-// $NAME in a step body resolves from the config's "variables" map at
-// execution time only — captions and evidence keep the placeholder, so
-// values (credentials included) never leave the config. Unknown names stay
-// literal, so prose like "$14.50" can't false-trip.
-function substituteVariables(body, config) {
-  return body.replace(/\$([A-Z_][A-Z0-9_]*)/g, (m, name) => (config?.variables?.[name] ?? m));
-}
-
-// A macro is a multi-line string (or array) of step bodies, leading "- "
-// optional.
-function macroSteps(name, config) {
-  const macro = config?.macros?.[name];
-  if (!macro) throw new Error(`UNKNOWN_MACRO "${name}" — define it under "macros" in the repo's profiles/<repo>.json`);
-  const lines = Array.isArray(macro) ? macro : String(macro).split('\n');
-  return lines
-      .map((l) => String(l).trim().replace(/^[-*]\s+/, ''))
-      .filter(Boolean)
-      .map((body) => {
-        if (/^run\s/i.test(body)) throw new Error(`NESTED_MACRO in "${name}" — macros cannot call macros`);
-        const { stepBody, checkpoint } = splitCheckpoint(body);
-        return { ...parseStep(substituteVariables(stepBody, config), name), caption: `${name} › ${stepBody}`, checkpoint };
-      });
-}
 
 async function main() {
   const { values, positionals } = parseArgs({
@@ -440,8 +380,8 @@ async function main() {
   // A scenario is a JS/PLAYWRIGHT module (`.spec.js`/`.js`/`.cjs`): the author
   // drives imperatively, calling the checkpoint()/visit() harness built below.
   // The module exports the async fn directly, or `{ run, meta }`; `meta` carries
-  // name/viewport/music/hold. (The verb strings the harness sugar and login
-  // macros use are executed by runStep/macroSteps — there is no scenario DSL.)
+  // name/viewport/music/hold. The sugar (see/click/fill/…) compiles to runStep
+  // action objects — there is no scenario DSL; login is likewise a JS function.
   if (!/\.c?js$/i.test(positionals[0])) {
     console.error(`SCENARIO_NOT_JS "${positionals[0]}" — a scenario must be a .spec.js (or .js/.cjs) module; the markdown and JSON formats were removed (see SKILL.md).`);
     process.exit(1);
@@ -459,8 +399,8 @@ async function main() {
   // ones excepted — redacting "1" would mangle unrelated output).
   SECRETS = Object.values(repoConfig?.variables || {}).map(String).filter((v) => v.length >= 4);
   // The profile's `variables` map — the single home for per-repo credentials and
-  // config values (login macros already read it via $NAME) — exposed to the
-  // scenario as `vars` so an author references a value BY NAME (`vars.EMAIL`)
+  // config values (the profile's login() also reads it as `vars`) — exposed to
+  // the scenario as `vars` so an author references a value BY NAME (`vars.EMAIL`)
   // and never embeds the literal. The saved scenario copy therefore stays
   // faithful (redact() has nothing to scrub), and a model-free reproduce run
   // gets the same values from the profile at runtime. Any value that still
@@ -659,4 +599,4 @@ async function main() {
 if (require.main === module) {
   main().catch(e => { console.error(e); process.exit(1); });
 }
-module.exports = { loadBadges, loadRepoConfig, CAPTION_CSS, setCaption };
+module.exports = { loadBadges, loadRepoConfig, formLogin, CAPTION_CSS, setCaption };

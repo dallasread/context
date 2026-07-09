@@ -98,7 +98,10 @@ done
 REPO=$(git remote get-url origin 2>/dev/null | sed -E 's#\.git$##; s#.*[:/]##')
 [ -n "$REPO" ] || REPO=$(basename "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo /unknown/.git)")")
 
-CONFIG="$SKILL_DIR/profiles/$REPO.json"
+# Profile is a JS module (profiles/<repo>.js), falling back to a legacy .json.
+# require() reads either; `serve` is a plain string on both.
+CONFIG="$SKILL_DIR/profiles/$REPO.js"
+[ -f "$CONFIG" ] || CONFIG="$SKILL_DIR/profiles/$REPO.json"
 SERVER=""
 [ -f "$CONFIG" ] && SERVER=$(node -e "console.log(require('$CONFIG').serve || '')")
 if [ -n "$OVERRIDE" ]; then

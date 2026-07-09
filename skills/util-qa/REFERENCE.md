@@ -71,9 +71,20 @@ Branding is profile-owned: a repo may supply a per-state corner **badge** that r
 
 ## Auth
 
-Fully automatic and per-repo: login is the repo's `login` macro. On a stale or missing session the runner executes the macro's steps through the app's real login form, persists the fresh session into this skill's cookie store (`cookies.json`), and retries the step — no manual cookie saving. **Do not hardcode `- run login` as a scenario's first step:** when the session is already valid, `visit /login` redirects to the dashboard and the macro's field-fills time out. Start the scenario with its real target `visit`; auto-login kicks in only when a step actually hits the login wall. qa.sh derives `<repo>` from the origin remote's repository name and passes it via `--repo`; pass `--repo` yourself on standalone `run.js` calls.
+Fully automatic and per-repo: login is the repo's `login` function in `profiles/<repo>.js`. On a stale or missing session the runner calls `login({ page, base, vars })` — raw Playwright plus the profile's `variables` injected as `vars` — to drive the app's real login form, persists the fresh session into this skill's cookie store (`cookies.json`), and retries the step. The function gets the raw `page` (not the scenario's auto-login `visit`, which would recurse), so it uses `page.goto`/`page.fill`/`page.click` directly:
 
-The profile JSON takes `variables` (values referenced in steps as `$NAME`, and in a scenario as `vars.NAME` — credentials live here), the `macros.login` steps, plus optional keys: `sessionCookie` (when unset, ALL post-login cookies are persisted), `extraCookies` written alongside the session (e.g. an app's interstitial-bypass cookie), and `badge` (per-state corner SVGs — see the onboarding half below). `chmod 600` it.
+```js
+login: async ({ page, base, vars }) => {
+  await page.goto(base + '/login', { waitUntil: 'networkidle' });
+  await page.fill('#email', vars.EMAIL);
+  await page.fill('#password', vars.PASSWORD);
+  await page.click('form [type=submit]');
+},
+```
+
+**Never call `login` yourself from a scenario:** start the scenario with its real target `visit`, and auto-login fires only when a step actually hits the login wall (calling it up front, when the session is already valid, would land on the dashboard and its field-fills would time out). qa.sh derives `<repo>` from the origin remote's repository name and passes it via `--repo`; pass `--repo` yourself on standalone `run.js` calls.
+
+The profile module exports `variables` (credentials and config values, read as `vars.NAME` in both `login()` and scenarios — never embedded in either), the `login` function, plus optional keys: `sessionCookie` (when unset, ALL post-login cookies are persisted), `extraCookies` written alongside the session (e.g. an app's interstitial-bypass cookie), and `badge` (per-state corner SVGs — see the onboarding half below). `chmod 600` it. A repo with no authenticated flows (a static site) needs no `login` and no `variables`; run it with `--no-auth`.
 
 **Credentials never appear in evidence.** Scenarios must not contain credentials (auto-login makes that unnecessary); a config value a scenario genuinely needs is read from the `vars` harness key by name (see above), never embedded. As a backstop the runner redacts the configured variable values from everything it emits — captions, steps.json, console output, and the scenario copy in the evidence dir — so posted QA evidence cannot leak them. Note the login itself can appear on camera when a session was stale (password fields are browser-masked); rerun for a login-free recording if that matters.
 
@@ -95,23 +106,26 @@ This skill's engine carries no repo-specific knowledge and does no guessing: **e
 
 ### Creating a per-repo config
 
-A per-repo config is two files named after the origin remote's repository name (`git remote get-url origin` basename, e.g. `app` for my/app):
+A per-repo config is one or two files named after the origin remote's repository name (`git remote get-url origin` basename, e.g. `app` for my/app):
 
-- `profiles/<repo>.json` — REQUIRED. The machine config: boot + login. `chmod 600` it.
+- `profiles/<repo>.js` — REQUIRED. A JS module exporting the machine config: boot + login. `chmod 600` it.
 
-  ```json
-  {
-    "serve": "bin/vite build && exec bundle exec puma -C config/puma.rb -p \"$PORT\"",
-    "variables": { "EMAIL": "dev-user@example.com", "PASSWORD": "…" },
-    "extraCookies": { "some_interstitial_bypass": "1" },
-    "badge": { "running": "<repo>.running.svg", "pass": "<repo>.pass.svg", "fail": "<repo>.fail.svg" },
-    "macros": {
-      "login": "visit /login\nfill input[type=email] with \"$EMAIL\"\nfill input[type=password] with \"$PASSWORD\"\nclick element form:has(input[type=password]) [type=submit]"
-    }
-  }
+  ```js
+  module.exports = {
+    serve: 'bin/vite build && exec bundle exec puma -C config/puma.rb -p "$PORT"',
+    variables: { EMAIL: 'dev-user@example.com', PASSWORD: '…' },
+    extraCookies: { some_interstitial_bypass: '1' },
+    badge: { running: '<repo>.running.svg', pass: '<repo>.pass.svg', fail: '<repo>.fail.svg' },
+    login: async ({ page, base, vars }) => {
+      await page.goto(base + '/login', { waitUntil: 'networkidle' });
+      await page.fill('input[type=email]', vars.EMAIL);
+      await page.fill('input[type=password]', vars.PASSWORD);
+      await page.click('form:has(input[type=password]) [type=submit]');
+    },
+  };
   ```
 
-  `serve` is one flat shell command run via `sh -c` with `$PORT` exported — chain an asset build with `&&`, and `exec` the final server so it owns the process. `variables` are values steps reference as `$NAME` (credentials live here, never in scenarios). `macros` are named step lists (multi-line string or array) scenarios invoke with `run <name>`; the `login` macro is required for authenticated QA (auto-login executes it). Source the values from the repo's README/CONTRIBUTING/seeds — deliberately, once.
+  `serve` is one flat shell command run via `sh -c` with `$PORT` exported — chain an asset build with `&&`, and `exec` the final server so it owns the process. `variables` hold credentials and config values, read as `vars.NAME` by both `login()` and scenarios (never embedded in either). `login` is an async function that drives the real login form with raw Playwright (`page`) and the injected `vars`; it is required for authenticated QA (auto-login calls it) and omitted for logged-out-only repos. Source the values from the repo's README/CONTRIBUTING/seeds — deliberately, once.
 
   `badge` is OPTIONAL branding: the little corner SVG on the video, mapped by outcome state to a file resolved against `profiles/` (an absolute path also works). Keys match the caption states — `running` (a checkpoint in progress), `pass`, `fail` — and the map is open, so any future state is branded by adding its key. Each state is independent; omit one and that outcome shows no badge. Omit `badge` entirely and the run shows no corner art at all — the engine carries no default mascot. Supply distinct art per state (they are swapped, not recolored); state the art's provenance/licensing in `<repo>.md`.
 

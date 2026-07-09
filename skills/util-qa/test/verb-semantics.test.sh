@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Behavioral pins for the "Exact verb semantics" section of SKILL.md — the
-# matching contract the .spec.js sugar (see/click/fill/select/wait) and the
-# login macros share, so scenario authors NEVER need to read run.js. Each test
+# Behavioral pins for the "Exact verb semantics" section of REFERENCE.md — the
+# matching contract the .spec.js sugar (see/click/fill/select/wait) compiles to,
+# so scenario authors NEVER need to read run.js. Each test
 # drives run.js against a static fixture (real browser) and proves a documented
 # rule: first-DOM-match resolution, case-insensitive substring text matching,
 # `seeButton`'s case asymmetry (submit value* is case-sensitive, button has-text

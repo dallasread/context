@@ -19,7 +19,7 @@ Scripted browser QA with video evidence. **You are a runner, not an author.** Yo
    ~/.claude/skills/util-qa/qa.sh <evidence-dir>/scenario.spec.js <evidence-dir>
    ```
 
-   qa.sh picks a free port, runs the repo's configured `serve` command, waits for readiness, runs the scenario, and (by default) kills the server on exit — pass, fail, error, or interrupt. There is NO stack detection: the boot comes from the repo's REQUIRED QA config (`profiles/<repo>.json`), and a repo without one fails with `QA_CONFIG_MISSING` — onboarding a repo is a once-per-repo task in [REFERENCE.md](REFERENCE.md). A command after `--` explicitly overrides `serve` for one-off runs; commands run with `$PORT` exported. Server (and any chained build) output lands in `<evidence-dir>/server.log`. To run against an already-running server instead: `node ~/.claude/skills/util-qa/run.js <scenario.spec.js> --out <dir> --base <url> --repo <name>`.
+   qa.sh picks a free port, runs the repo's configured `serve` command, waits for readiness, runs the scenario, and (by default) kills the server on exit — pass, fail, error, or interrupt. There is NO stack detection: the boot comes from the repo's REQUIRED QA config (`profiles/<repo>.js`), and a repo without one fails with `QA_CONFIG_MISSING` — onboarding a repo is a once-per-repo task in [REFERENCE.md](REFERENCE.md). A command after `--` explicitly overrides `serve` for one-off runs; commands run with `$PORT` exported. Server (and any chained build) output lands in `<evidence-dir>/server.log`. To run against an already-running server instead: `node ~/.claude/skills/util-qa/run.js <scenario.spec.js> --out <dir> --base <url> --repo <name>`.
 
    **Iterating? Keep the server warm.** A fresh boot rebuilds assets and boots the framework every run (tens of seconds). For repeated runs against the same worktree, add `--keep`: the server is left running and recorded, and later runs REUSE it — skipping the whole boot, so they start in well under a second and the only cost is the scenario itself. Reuse serves the assets the server booted with; framework dev-reload still picks up backend/view edits live, but a **JS/CSS source** change needs `--fresh` (stop, rebuild, reboot). `--stop` tears this worktree's warm server down. State is keyed by the git worktree root, so warm servers across parallel worktrees each get their own port and never collide.
 
@@ -41,9 +41,9 @@ Scripted browser QA with video evidence. **You are a runner, not an author.** Yo
 Both are off the runner's per-run hot path, in [REFERENCE.md](REFERENCE.md):
 
 - **Authoring** — writing the `.spec.js` (the harness, the verb vocabulary and its exact matching semantics, checkpoints, `vars`, and the evidence engine) is the caller's job, not the runner's.
-- **Onboarding** — standing up a new repo's `profiles/<repo>.json` is a once-per-repo task; a run stops with `QA_CONFIG_MISSING` when it is absent.
+- **Onboarding** — standing up a new repo's `profiles/<repo>.js` is a once-per-repo task; a run stops with `QA_CONFIG_MISSING` when it is absent.
 
-**Auth is automatic.** On a stale or missing session the runner logs in through the app's real form via the repo's `login` macro, persists the session, and retries — no manual step. Use `--no-auth` for logged-out flows (login page, marketing pages). The macro schema, the manual cookie fallback, and the one sanctioned dev-data exception live in REFERENCE.
+**Auth is automatic.** On a stale or missing session the runner calls the repo's `login()` function (in the profile) to drive the app's real form, persists the session, and retries — no manual step. Use `--no-auth` for logged-out flows (login page, marketing pages). The login function, the profile schema, the cookie fallback, and the one sanctioned dev-data exception live in REFERENCE.
 
 ## Posting evidence to GitHub
 
@@ -56,7 +56,7 @@ Not QA's job. Formatting the evidence into a PR comment is the **review-dry** sk
 ## Failure modes
 
 - `AUTH_FAILED` — stale cookie; re-save it (see REFERENCE's Auth section).
-- `QA_CONFIG_MISSING` — the repo has no `profiles/<repo>.json`; onboard it (REFERENCE).
+- `QA_CONFIG_MISSING` — the repo has no `profiles/<repo>.js`; onboard it (REFERENCE).
 - Selector timeout — the selector is wrong or the feature is broken. Read the frame for that step before deciding which.
 - `NO_COOKIE` — no stored cookie for the host; save one or pass `--no-auth`.
 - ffmpeg missing — `brew install ffmpeg`.
