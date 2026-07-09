@@ -40,14 +40,14 @@ for i in $(seq 1 40); do
 done
 
 # --- T1: `viewport: 390x844` sizes the run and is recorded -------------------
-cat > "$TMPROOT/mobile.md" <<'EOF'
-# viewport - mobile width sizes the capture
-hold: 0ms
-viewport: 390x844
-- visit /
-- see "Viewport Fixture Page" :: Page renders at the requested width
+cat > "$TMPROOT/mobile.spec.js" <<'EOF'
+module.exports = async ({ visit, checkpoint, see }) => {
+  await visit('/');
+  await checkpoint('Page renders at the requested width', () => see('Viewport Fixture Page'));
+};
+module.exports.meta = { hold: 0, viewport: { width: 390, height: 844 } };
 EOF
-node "$RUN" "$TMPROOT/mobile.md" --out "$TMPROOT/mobileout" --base "$BASE" --no-auth >/dev/null 2>&1
+node "$RUN" "$TMPROOT/mobile.spec.js" --out "$TMPROOT/mobileout" --base "$BASE" --no-auth >/dev/null 2>&1
 rc=$?
 MJSON="$TMPROOT/mobileout/steps.json"
 chk "T1 runner exits zero"                    "[ $rc -eq 0 ]"
@@ -58,13 +58,14 @@ chk "T1 a frame PNG was written"              "[ -n \"$FRAME\" ]"
 chk "T1 frame PNG is 390px wide"              "[ \"\$(pngw \"$FRAME\")\" = 390 ]"
 
 # --- T2: no viewport line falls back to the documented default ---------------
-cat > "$TMPROOT/default.md" <<'EOF'
-# viewport - default when unset
-hold: 0ms
-- visit /
-- see "Viewport Fixture Page" :: Page renders at default width
+cat > "$TMPROOT/default.spec.js" <<'EOF'
+module.exports = async ({ visit, checkpoint, see }) => {
+  await visit('/');
+  await checkpoint('Page renders at default width', () => see('Viewport Fixture Page'));
+};
+module.exports.meta = { hold: 0 };
 EOF
-node "$RUN" "$TMPROOT/default.md" --out "$TMPROOT/defaultout" --base "$BASE" --no-auth >/dev/null 2>&1
+node "$RUN" "$TMPROOT/default.spec.js" --out "$TMPROOT/defaultout" --base "$BASE" --no-auth >/dev/null 2>&1
 DJSON="$TMPROOT/defaultout/steps.json"
 chk "T2 default width is 1280"                "[ \"\$(sj '$DJSON' 'd.viewport.width')\" = 1280 ]"
 chk "T2 default height is 900"                "[ \"\$(sj '$DJSON' 'd.viewport.height')\" = 900 ]"

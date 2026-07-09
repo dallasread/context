@@ -44,40 +44,44 @@ for i in $(seq 1 40); do
 done
 
 # --- T1: a real click still works with the highlight overlay present -------
-cat > "$TMPROOT/click.md" <<EOF
-# click still works with cursor highlight
-- visit /
-- click element #go
-- see "$REVEAL" :: The revealed text appears after the click
+cat > "$TMPROOT/click.spec.js" <<EOF
+module.exports = async ({ visit, click, checkpoint, see }) => {
+  await visit('/');
+  await click('#go');
+  await checkpoint('The revealed text appears after the click', () => see('$REVEAL'));
+};
 EOF
-node "$RUN" "$TMPROOT/click.md" --out "$TMPROOT/clickout" --base "$BASE" --no-auth --music lounge >/dev/null 2>&1
+node "$RUN" "$TMPROOT/click.spec.js" --out "$TMPROOT/clickout" --base "$BASE" --no-auth --music lounge >/dev/null 2>&1
 rc=$?
 CJSON="$TMPROOT/clickout/steps.json"
 chk "T1 runner exits zero"                 "[ $rc -eq 0 ]"
 chk "T1 verdict is PASS"                    "[ \"\$(sj '$CJSON' 'd.verdict')\" = PASS ]"
-chk "T1 click step passed"                  "[ \"\$(sj '$CJSON' 'd.steps[1].ok')\" = true ]"
-chk "T1 revealed-text checkpoint passed"    "[ \"\$(sj '$CJSON' 'd.steps[2].ok')\" = true ]"
+# The revealed-text checkpoint can only pass if the click landed (the div is
+# display:none until #go is clicked), so it doubles as proof the click worked.
+chk "T1 revealed-text checkpoint passed"    "[ \"\$(sj '$CJSON' 'd.steps[0].ok')\" = true ]"
 
 # --- T2: every named music track produces a valid mp4 ----------------------
 for track in lounge twilight sunrise reggae ska; do
-  cat > "$TMPROOT/m.md" <<EOF
-# music $track
-- visit /
-- see "Reveal"
+  cat > "$TMPROOT/m.spec.js" <<'EOF'
+module.exports = async ({ visit, checkpoint, see }) => {
+  await visit('/');
+  await checkpoint('the reveal button is present', () => see('Reveal'));
+};
 EOF
-  node "$RUN" "$TMPROOT/m.md" --out "$TMPROOT/m-$track" --base "$BASE" --no-auth --music "$track" >/dev/null 2>&1
+  node "$RUN" "$TMPROOT/m.spec.js" --out "$TMPROOT/m-$track" --base "$BASE" --no-auth --music "$track" >/dev/null 2>&1
   MJSON="$TMPROOT/m-$track/steps.json"
   chk "T2 [$track] recorded in manifest"    "[ \"\$(sj '$MJSON' 'd.music')\" = $track ]"
   chk "T2 [$track] mp4 encoded (non-empty)" "[ -s '$TMPROOT/m-$track/qa.mp4' ]"
 done
 
 # --- T3: an unknown track falls back to lounge -----------------------------
-cat > "$TMPROOT/bogus.md" <<EOF
-# music fallback
-- visit /
-- see "Reveal"
+cat > "$TMPROOT/bogus.spec.js" <<'EOF'
+module.exports = async ({ visit, checkpoint, see }) => {
+  await visit('/');
+  await checkpoint('the reveal button is present', () => see('Reveal'));
+};
 EOF
-node "$RUN" "$TMPROOT/bogus.md" --out "$TMPROOT/bogusout" --base "$BASE" --no-auth --music not-a-real-track >/dev/null 2>&1
+node "$RUN" "$TMPROOT/bogus.spec.js" --out "$TMPROOT/bogusout" --base "$BASE" --no-auth --music not-a-real-track >/dev/null 2>&1
 BJSON="$TMPROOT/bogusout/steps.json"
 chk "T3 unknown track falls back to lounge" "[ \"\$(sj '$BJSON' 'd.music')\" = lounge ]"
 chk "T3 mp4 still encoded"                  "[ -s '$TMPROOT/bogusout/qa.mp4' ]"

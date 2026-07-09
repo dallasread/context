@@ -6,8 +6,8 @@
 // two styles:
 //   VIDEO (default) — the QA heading, the k/K count line, a terse ✅/⚠️
 //   checkpoint checklist, the failing checkpoint's frame (only when there is
-//   one), the video inline, and the QA script collapsed. The video is the
-//   review; frames stay out of the comment.
+//   one), the video inline, and below it the QA script in a collapsible
+//   <details> (always present when there is a video). Frames stay out.
 //   FRAMES (--frames) — the per-checkpoint table whose "what it proves" cells
 //   expand (<details>) to the screenshot, plus one collapsed "🎬 Video & QA
 //   script" block. For when a frame-by-frame review is explicitly wanted.
@@ -199,7 +199,7 @@ function build(manifest, opts) {
     if (video || scenario) {
       out.push('<details>', '<summary>🎬 Video & QA script</summary>', '');
       if (video) out.push(video, '');
-      if (scenario) out.push('```markdown', scenario.replace(/```/g, '` ``').trimEnd(), '```', '');
+      if (scenario) out.push('```js', scenario.replace(/```/g, '` ``').trimEnd(), '```', '');
       out.push('</details>', '');
     }
     return out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
@@ -220,8 +220,11 @@ function build(manifest, opts) {
   const failUrl = failing && failing.frame ? assets[path.basename(failing.frame)] : undefined;
   if (failUrl) out.push(`<img alt="${esc(failing.caption)}" src="${esc(failUrl)}">`, '');
   if (video) out.push(video, '');
+  // The QA script sits below the video in a collapsible <details> — always
+  // present whenever there is a video (the workflow always passes --scenario
+  // alongside --video), so a reader can expand exactly what was driven.
   if (scenario) {
-    out.push('<details>', '<summary>📜 QA script</summary>', '', '```markdown', scenario.replace(/```/g, '` ``').trimEnd(), '```', '', '</details>', '');
+    out.push('<details>', '<summary>📜 QA script</summary>', '', '```js', scenario.replace(/```/g, '` ``').trimEnd(), '```', '', '</details>', '');
   }
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
 }

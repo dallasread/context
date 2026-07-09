@@ -38,33 +38,37 @@ for i in $(seq 1 40); do
   sleep 0.25
 done
 
-# --- T1: a `see` for ABSENT text must FAIL (chrome not self-matched) -------
-cat > "$TMPROOT/fail.md" <<EOF
-# isolation - absent text must fail
-- visit /
-- see "$PRESENT"
-- see "$ABSENT"
+# --- T1: a `see` for ABSENT text must FAIL even though the checkpoint CAPTION
+#         contains that very text — proving the caption (closed shadow root) is
+#         never self-matched by the assertion.
+cat > "$TMPROOT/fail.spec.js" <<EOF
+module.exports = async ({ visit, checkpoint, see }) => {
+  await visit('/');
+  await checkpoint('present text is on the page', () => see('$PRESENT'));
+  await checkpoint('the string $ABSENT should be visible', () => see('$ABSENT'));
+};
 EOF
-node "$RUN" "$TMPROOT/fail.md" --out "$TMPROOT/failout" --base "$BASE" --no-auth >/dev/null 2>&1
+node "$RUN" "$TMPROOT/fail.spec.js" --out "$TMPROOT/failout" --base "$BASE" --no-auth >/dev/null 2>&1
 rc=$?
 FJSON="$TMPROOT/failout/steps.json"
 chk "T1 runner exits non-zero"          "[ $rc -ne 0 ]"
 chk "T1 verdict is FAIL"                "[ \"\$(sj '$FJSON' 'd.verdict')\" = FAIL ]"
-chk "T1 present-text step passed"       "[ \"\$(sj '$FJSON' 'd.steps[1].ok')\" = true ]"
-chk "T1 absent-text step FAILED"        "[ \"\$(sj '$FJSON' 'd.steps[2].ok')\" = false ]"
+chk "T1 present-text checkpoint passed" "[ \"\$(sj '$FJSON' 'd.steps[0].ok')\" = true ]"
+chk "T1 absent-text checkpoint FAILED"  "[ \"\$(sj '$FJSON' 'd.steps[1].ok')\" = false ]"
 
 # --- T2: positive control — present text alone PASSES (no false failures) --
-cat > "$TMPROOT/pass.md" <<EOF
-# isolation - present text passes
-- visit /
-- see "$PRESENT"
+cat > "$TMPROOT/pass.spec.js" <<EOF
+module.exports = async ({ visit, checkpoint, see }) => {
+  await visit('/');
+  await checkpoint('the fixture text is visible', () => see('$PRESENT'));
+};
 EOF
-node "$RUN" "$TMPROOT/pass.md" --out "$TMPROOT/passout" --base "$BASE" --no-auth >/dev/null 2>&1
+node "$RUN" "$TMPROOT/pass.spec.js" --out "$TMPROOT/passout" --base "$BASE" --no-auth >/dev/null 2>&1
 rc=$?
 PJSON="$TMPROOT/passout/steps.json"
 chk "T2 runner exits zero"              "[ $rc -eq 0 ]"
 chk "T2 verdict is PASS"                "[ \"\$(sj '$PJSON' 'd.verdict')\" = PASS ]"
-chk "T2 present-text step passed"       "[ \"\$(sj '$PJSON' 'd.steps[1].ok')\" = true ]"
+chk "T2 present-text checkpoint passed" "[ \"\$(sj '$PJSON' 'd.steps[0].ok')\" = true ]"
 
 echo
 echo "# passed=$PASS failed=$FAIL"

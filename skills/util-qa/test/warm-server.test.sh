@@ -26,7 +26,7 @@ echo "# warm-server lifecycle"
 
 # --- T1: --keep boots, writes state, leaves server alive ------------------
 A=$(mkrepo); SA=$(state "$A")
-( cd "$A" && QA_SKIP_RUN=1 "$QA" dummy.md "$A/out" --keep -- $STUB ) >/dev/null 2>&1
+( cd "$A" && QA_SKIP_RUN=1 "$QA" dummy.spec.js "$A/out" --keep -- $STUB ) >/dev/null 2>&1
 rc=$?
 chk "T1 --keep exits 0"            "[ $rc -eq 0 ]"
 chk "T1 state file written"        "[ -f '$SA' ]"
@@ -35,13 +35,13 @@ chk "T1 recorded pid is alive"     "alive '$PIDA'"
 chk "T1 recorded base responds"    "responds '$BASEA'"
 
 # --- T2: second --keep reuses the SAME server (no reboot) -----------------
-( cd "$A" && QA_SKIP_RUN=1 "$QA" dummy.md "$A/out2" --keep -- $STUB ) >/dev/null 2>&1
+( cd "$A" && QA_SKIP_RUN=1 "$QA" dummy.spec.js "$A/out2" --keep -- $STUB ) >/dev/null 2>&1
 PIDA2=$(serverpid "$SA")
 chk "T2 reuse keeps same pid"      "[ '$PIDA2' = '$PIDA' ]"
 chk "T2 server still alive"        "alive '$PIDA'"
 
 # --- T3: --fresh replaces the warm server (new pid, old one dead) ---------
-( cd "$A" && QA_SKIP_RUN=1 "$QA" dummy.md "$A/out3" --keep --fresh -- $STUB ) >/dev/null 2>&1
+( cd "$A" && QA_SKIP_RUN=1 "$QA" dummy.spec.js "$A/out3" --keep --fresh -- $STUB ) >/dev/null 2>&1
 PIDA3=$(serverpid "$SA")
 chk "T3 --fresh boots new pid"     "[ '$PIDA3' != '$PIDA' ]"
 chk "T3 old server killed"         "! alive '$PIDA'"
@@ -54,8 +54,8 @@ chk "T4 server killed"             "! alive '$PIDA3'"
 
 # --- T5: parallel worktrees stay independent -----------------------------
 B=$(mkrepo); SB=$(state "$B")
-( cd "$A" && QA_SKIP_RUN=1 "$QA" dummy.md "$A/o" --keep -- $STUB ) >/dev/null 2>&1
-( cd "$B" && QA_SKIP_RUN=1 "$QA" dummy.md "$B/o" --keep -- $STUB ) >/dev/null 2>&1
+( cd "$A" && QA_SKIP_RUN=1 "$QA" dummy.spec.js "$A/o" --keep -- $STUB ) >/dev/null 2>&1
+( cd "$B" && QA_SKIP_RUN=1 "$QA" dummy.spec.js "$B/o" --keep -- $STUB ) >/dev/null 2>&1
 PIDA=$(serverpid "$SA"); PIDB=$(serverpid "$SB")
 BA=$(serverbase "$SA"); BB=$(serverbase "$SB")
 chk "T5 distinct state files"      "[ '$SA' != '$SB' ]"
@@ -67,18 +67,18 @@ chk "T5 stopping A leaves B alive" "alive '$PIDB' && ! alive '$PIDA'"
 
 # --- T6: default (no flag) is hermetic — killed on exit, no state --------
 C=$(mkrepo); SC=$(state "$C")
-out=$( cd "$C" && QA_SKIP_RUN=1 "$QA" dummy.md "$C/o" -- $STUB 2>&1 )
+out=$( cd "$C" && QA_SKIP_RUN=1 "$QA" dummy.spec.js "$C/o" -- $STUB 2>&1 )
 BASEC=$(echo "$out" | grep -o 'http://localhost:[0-9]*' | head -1)
 chk "T6 no state file written"     "[ ! -f '$SC' ]"
 chk "T6 server killed on exit"     "! responds '$BASEC'"
 
 # --- T7: stale state (server died) triggers a reboot ---------------------
 D=$(mkrepo); SD=$(state "$D")
-( cd "$D" && QA_SKIP_RUN=1 "$QA" dummy.md "$D/o" --keep -- $STUB ) >/dev/null 2>&1
+( cd "$D" && QA_SKIP_RUN=1 "$QA" dummy.spec.js "$D/o" --keep -- $STUB ) >/dev/null 2>&1
 PIDD=$(serverpid "$SD")
 kill_tree_d() { for c in $(pgrep -P "$1"); do kill_tree_d "$c"; done; kill "$1" 2>/dev/null; }
 kill_tree_d "$PIDD"; sleep 1
-( cd "$D" && QA_SKIP_RUN=1 "$QA" dummy.md "$D/o2" --keep -- $STUB ) >/dev/null 2>&1
+( cd "$D" && QA_SKIP_RUN=1 "$QA" dummy.spec.js "$D/o2" --keep -- $STUB ) >/dev/null 2>&1
 PIDD2=$(serverpid "$SD")
 chk "T7 stale state rebooted"      "[ '$PIDD2' != '$PIDD' ] && alive '$PIDD2'"
 ( cd "$D" && "$QA" --stop ) >/dev/null 2>&1

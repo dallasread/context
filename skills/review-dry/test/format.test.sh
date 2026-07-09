@@ -3,9 +3,10 @@
 # the "### 👓 QA" block of the canonical review-comment template.
 # Two styles are proven here:
 #   VIDEO (default) — count line, a terse ✅/⚠️ checkpoint checklist (no
-#   table), the video inline, the QA script collapsed; ONLY the failing
-#   checkpoint's frame is embedded. --list-frames names just failing +
-#   finding frames.
+#   table), the video inline, then below it the QA script in a collapsible
+#   <details> (always present when there is a video); ONLY the failing
+#   checkpoint's frame is embedded. --list-frames names just failing + finding
+#   frames.
 #   FRAMES (--frames) — the checkpoint table: failing row sorts FIRST, opens
 #   by default, carries ⚠️; passing rows collapse with ✅; video + script in
 #   one collapsed block; --list-frames names every row frame too.
@@ -49,7 +50,7 @@ cat > "$TMP/assets.json" <<'EOF'
 { "02-see.png": "https://github.com/user-attachments/assets/PASSURL",
   "03-see.png": "https://github.com/user-attachments/assets/FAILURL" }
 EOF
-printf '# Registration order summary\n- visit /r\n' > "$TMP/scenario.md"
+printf "module.exports = async ({ visit, checkpoint, see }) => {\n  await visit('/r');\n  await checkpoint('order summary', () => see('Total due today'));\n};\n" > "$TMP/scenario.spec.js"
 # An eyeballed defect no assertion caught, on a NON-checkpoint frame, with a
 # code lead meant only for review.
 cat > "$FRUN/findings.json" <<'EOF'
@@ -58,7 +59,7 @@ EOF
 
 # ---------- VIDEO style (default) ------------------------------------------
 node "$FMT" "$FRUN" --assets "$TMP/assets.json" \
-  --video "https://github.com/user-attachments/assets/VIDURL" --scenario "$TMP/scenario.md" >/dev/null 2>&1
+  --video "https://github.com/user-attachments/assets/VIDURL" --scenario "$TMP/scenario.spec.js" >/dev/null 2>&1
 rc=$?
 CMT="$FRUN/comment.md"; cp "$CMT" "$TMP/video-comment.md"; VCMT="$TMP/video-comment.md"
 chk "video: exits zero"                  "[ $rc -eq 0 ]"
@@ -72,9 +73,10 @@ chk "video: error text on fail line"     "has '$VCMT' 'timed out'"
 chk "video: failing frame embedded"      "has '$VCMT' 'assets/FAILURL'"
 chk "video: passing frame NOT embedded"  "! has '$VCMT' 'assets/PASSURL'"
 chk "video: video url inline"            "has '$VCMT' 'assets/VIDURL'"
-chk "video: video NOT inside details"    "before '$VCMT' 'assets/VIDURL' '<details>'"
-chk "video: script collapsed"            "has '$VCMT' '📜 QA script'"
-chk "video: script content present"      "has '$VCMT' 'visit /r'"
+chk "video: video is inline (before the script details)" "before '$VCMT' 'assets/VIDURL' '<details>'"
+chk "video: script in a details/summary" "has '$VCMT' '<summary>📜 QA script</summary>'"
+chk "video: script content present"      "has '$VCMT' \"visit('/r')\""
+chk "video: script BELOW the video"      "before '$VCMT' 'assets/VIDURL' \"visit('/r')\""
 chk "video: no combined 🎬 block"        "! has '$VCMT' '🎬 Video & QA script'"
 chk "video: no Issues observed section"  "! has '$VCMT' 'Issues observed'"
 chk "video: forReview lead NOT present"  "! has '$VCMT' 'OrderSummary.css'"
@@ -88,7 +90,7 @@ chk "video list-frames: NO pass frame"   "! echo \"\$LF\" | grep -q '02-see.png'
 
 # ---------- FRAMES style (--frames) -----------------------------------------
 node "$FMT" "$FRUN" --frames --assets "$TMP/assets.json" \
-  --video "https://github.com/user-attachments/assets/VIDURL" --scenario "$TMP/scenario.md" >/dev/null 2>&1
+  --video "https://github.com/user-attachments/assets/VIDURL" --scenario "$TMP/scenario.spec.js" >/dev/null 2>&1
 rc=$?
 TCMT="$FRUN/comment.md"
 chk "frames: exits zero"                 "[ $rc -eq 0 ]"
@@ -128,7 +130,14 @@ PCMT="$PRUN/comment.md"
 chk "pass run: 2/2 passed"               "has '$PCMT' '2 / 2 checkpoints passed'"
 chk "pass run: checklist only"           "! has '$PCMT' '<table>'"
 chk "pass run: no warning glyph"         "! has '$PCMT' '⚠️'"
-chk "pass run: no video/script blocks"   "! has '$PCMT' '📜'"
+chk "pass run: no script when none given" "! has '$PCMT' '📜'"
+
+# A PASS run WITH a scenario must STILL carry the script (in its <details>)
+# below the video — this is exactly what the real review missed: a clean pass
+# shipped with no script at all.
+node "$FMT" "$PRUN" --video "https://github.com/user-attachments/assets/VIDURL2" --scenario "$TMP/scenario.spec.js" >/dev/null 2>&1
+chk "pass+script: script present"        "has '$PCMT' '<summary>📜 QA script</summary>'"
+chk "pass+script: script BELOW video"    "before '$PCMT' 'assets/VIDURL2' \"visit('/r')\""
 
 # --- custom heading (--heading, for pr-dry taking over the PR's QA section) --
 # pr-dry renders the QA block as a top-level "## 👓 QA" PR section — same label
@@ -144,10 +153,10 @@ chk "heading: works with --frames too"   "has '$PCMT' '## 👓 QA'"
 #     SAME evidence and prove the bodies (everything below the heading line) are
 #     byte-identical — so a PR's QA section always matches the review's QA block.
 node "$FMT" "$FRUN" --assets "$TMP/assets.json" \
-  --video "https://github.com/user-attachments/assets/VIDURL" --scenario "$TMP/scenario.md" >/dev/null 2>&1
+  --video "https://github.com/user-attachments/assets/VIDURL" --scenario "$TMP/scenario.spec.js" >/dev/null 2>&1
 tail -n +2 "$FRUN/comment.md" > "$TMP/qa-body.txt"
 node "$FMT" "$FRUN" --heading '## 👓 QA' --assets "$TMP/assets.json" \
-  --video "https://github.com/user-attachments/assets/VIDURL" --scenario "$TMP/scenario.md" >/dev/null 2>&1
+  --video "https://github.com/user-attachments/assets/VIDURL" --scenario "$TMP/scenario.spec.js" >/dev/null 2>&1
 tail -n +2 "$FRUN/comment.md" > "$TMP/pr-body.txt"
 chk "parity: PR render leads with its heading" "node -e \"process.exit(require('fs').readFileSync('$FRUN/comment.md','utf8').startsWith('## 👓 QA\n')?0:1)\""
 chk "parity: PR QA body == review QA body"      "diff -q '$TMP/qa-body.txt' '$TMP/pr-body.txt' >/dev/null"

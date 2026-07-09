@@ -15,9 +15,24 @@ const { chromium } = require('playwright');
 const COOKIES_FILE = path.join(__dirname, 'cookies.json');
 const CREDENTIALS_FILE = path.join(__dirname, 'credentials.json');
 
-const STEP_TIMEOUT_MS = 2_500; // how long an assertion waits for its target; also how long a real failure takes to surface (red), so keep it tight — the app is served locally
+// Load a scenario as a CommonJS module regardless of the app repo's package
+// type. Scenarios are always CommonJS (`module.exports`), but the evidence dir
+// lives in the app repo's own tmp/, so in an ESM app ("type":"module") Node
+// parses a bare `.js` scenario as ESM and require() throws ERR_REQUIRE_ESM. A
+// `.cjs` extension forces CommonJS parsing no matter the enclosing package, so
+// for any non-.cjs path we materialize a sibling `.cjs` copy (adjacent, to keep
+// relative resolution intact) and require that — the author never has to rename
+// the scenario to .cjs to work in an ESM repo.
+function requireScenario(absPath, source) {
+  if (/\.cjs$/i.test(absPath)) return require(absPath);
+  const shim = path.join(path.dirname(absPath), `.${path.basename(absPath)}.qa-load.cjs`);
+  fs.writeFileSync(shim, source);
+  try { return require(shim); }
+  finally { fs.rmSync(shim, { force: true }); }
+}
+
+const STEP_TIMEOUT_MS = 2_000; // the per-step cap: how long an assertion/interaction waits for its target (also how long a real failure takes to surface red), AND the ceiling an explicit `wait` is clamped to — no single step may stall the run past this. Kept tight because the app is served locally.
 const FAIL_HOLD_MS = 1800; // a failed step holds red a touch longer than a pass holds green, so the failure clearly reads as the end
-const DEFAULT_HOLD_MS = 250; // per-step dwell when a scenario has no checkpoints (classic mode); override with `hold: <n>ms`
 const CHECKPOINT_HOLD_MS = 1000; // a passed checkpoint holds green ~1s before the next one goes in-progress
 const CHECKPOINT_INTRO_MS = 400; // brief in-progress beat when a checkpoint becomes active, before its plumbing runs
 
@@ -100,30 +115,6 @@ async function smoothScrollTo(locator) {
   await locator.evaluate((el) => el.scrollIntoView({ behavior: 'smooth', block: 'center' })).catch(() => {});
 }
 
-// Wait out the dwell while animating a subtle progress fill in the caption
-// bar. requestAnimationFrame forces a repaint every tick, so the recording
-// gets real frames through the hold instead of one long frozen frame.
-async function holdWithMotion(page, ms) {
-  await page.evaluate(async (ms) => {
-    const host = document.getElementById('__qa_host__');
-    const bar = host && host.__qaShadow && host.__qaShadow.getElementById('cap');
-    const prog = document.createElement('div');
-    prog.style.cssText = 'position:absolute;left:0;bottom:0;height:4px;width:0%;background:rgba(255,255,255,0.4);';
-    bar?.appendChild(prog);
-    const start = performance.now();
-    await new Promise((resolve) => {
-      const tick = (t) => {
-        const f = Math.min(1, (t - start) / ms);
-        prog.style.width = `${f * 100}%`;
-        if (f >= 1) return resolve();
-        requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-    });
-    prog.remove();
-  }, ms).catch(() => page.waitForTimeout(ms));
-}
-
 // A rAF-driven pause: forces repaints for `ms` so an in-page animation (a click
 // ripple, a CSS transition) is actually captured — the recorder only grabs
 // frames when the page paints.
@@ -177,7 +168,7 @@ async function setCaption(page, text, state = 'running', checkpoint = false, bad
     // open root) getByText(X) would match the caption itself and the assertion
     // could never fail. The isolation — not any text-rendering trick — is what
     // keeps text assertions honest. The closed root's handle is stashed on the
-    // host element so both this function and holdWithMotion can reach in; the
+    // host element so both this function and the dwell repaint can reach in; the
     // whole thing is recreated after navigation wipes the DOM.
     let host = document.getElementById('__qa_host__');
     let shadow;
@@ -240,7 +231,11 @@ function loadCookies(host) {
 // standalone --base runs without --repo.
 function loadRepoConfig(repo, host) {
   if (repo) {
-    const f = path.join(__dirname, 'profiles', `${repo}.json`);
+    // A bare repo name resolves to profiles/<name>.json; a value ending in
+    // .json is loaded as a direct path — handy for standalone and model-free
+    // reproduce runs pointed at an arbitrary profile. qa.sh always passes a
+    // bare origin-remote name, so it never trips the path branch.
+    const f = /\.json$/i.test(repo) ? path.resolve(repo) : path.join(__dirname, 'profiles', `${repo}.json`);
     if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, 'utf8'));
   }
   return hostEntry(CREDENTIALS_FILE, host);
@@ -338,16 +333,18 @@ async function runStep(page, step, base) {
       await page.getByText(step.text).first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
       await smoothScrollTo(page.getByText(step.text).first());
       break;
-    case 'waitMs':
-      await page.waitForTimeout(step.ms);
+    case 'waitMs': {
+      // An explicit wait is clamped to the per-step cap, so no single step —
+      // not even a `wait` — can stall the run past STEP_TIMEOUT_MS. If a target
+      // legitimately needs longer, chain more than one wait (each its own step).
+      const ms = Math.min(step.ms, STEP_TIMEOUT_MS);
+      if (ms < step.ms) console.warn(`  (wait ${step.ms}ms clamped to ${ms}ms — per-step cap)`);
+      await page.waitForTimeout(ms);
       break;
+    }
     default:
       throw new Error(`Unknown action: ${step.action}`);
   }
-}
-
-function stepLabel(step) {
-  return step.checkpoint || step.caption || `${step.action} ${step.path || step.selector || step.text || step.ms || ''}`.trim();
 }
 
 // A step becomes a CHECKPOINT — a human-meaningful moment tied to the change's
@@ -420,43 +417,6 @@ function macroSteps(name, config) {
       });
 }
 
-function parseMarkdownScenario(text, config = {}) {
-  const scenario = { name: null, base: null, steps: [] };
-
-  for (const line of text.split('\n')) {
-    const heading = line.match(/^#\s+(.+)$/);
-    if (heading && !scenario.name) { scenario.name = heading[1].trim(); continue; }
-    const setting = line.match(/^base:\s*(\S+)/i);
-    if (setting) { scenario.base = setting[1]; continue; }
-    const hold = line.match(/^hold:\s*(\d+)ms/i);
-    if (hold) { scenario.holdMs = parseInt(hold[1], 10); continue; }
-    const music = line.match(/^music:\s*(\S+)/i);
-    if (music) { scenario.music = music[1]; continue; }
-    const viewport = line.match(/^viewport:\s*(\d+)\s*x\s*(\d+)/i);
-    if (viewport) { scenario.viewport = { width: parseInt(viewport[1], 10), height: parseInt(viewport[2], 10) }; continue; }
-    const bullet = line.match(/^\s*[-*]\s+(.+)$/);
-    if (!bullet) continue;
-    const body = bullet[1].trim();
-
-    const { stepBody, checkpoint } = splitCheckpoint(body);
-
-    // `run <macro>` expands a repo-defined multi-line step string inline,
-    // one level deep — macros contain only primitive verbs. A checkpoint
-    // caption belongs on a single primitive step, not on a macro expansion.
-    const macroCall = stepBody.match(/^run\s+(\S+)$/i);
-    if (macroCall) {
-      if (checkpoint) throw new Error(`CHECKPOINT_ON_MACRO "${body}" — attach ":: caption" to a primitive step inside the flow, not to "run <macro>"`);
-      scenario.steps.push(...macroSteps(macroCall[1], config));
-      continue;
-    }
-
-    scenario.steps.push({ ...parseStep(substituteVariables(stepBody, config)), caption: stepBody, checkpoint });
-  }
-
-  if (!scenario.steps.length) throw new Error('EMPTY_SCENARIO — no recognized step bullets found');
-  return scenario;
-}
-
 async function main() {
   const { values, positionals } = parseArgs({
     options: {
@@ -471,13 +431,26 @@ async function main() {
   });
 
   if (positionals.length !== 1 || !values.out) {
-    console.error('Usage: run.js <scenario.md> --out <dir> [--base <url>] [--repo <name>] [--no-auth]');
+    console.error('Usage: run.js <scenario.spec.js> --out <dir> [--base <url>] [--repo <name>] [--no-auth]');
     process.exit(1);
   }
 
   const raw = fs.readFileSync(positionals[0], 'utf8');
   const repoConfig = loadRepoConfig(values.repo, values.base ? new URL(values.base).host : 'localhost');
-  const scenario = positionals[0].endsWith('.json') ? JSON.parse(raw) : parseMarkdownScenario(raw, repoConfig || {});
+  // A scenario is a JS/PLAYWRIGHT module (`.spec.js`/`.js`/`.cjs`): the author
+  // drives imperatively, calling the checkpoint()/visit() harness built below.
+  // The module exports the async fn directly, or `{ run, meta }`; `meta` carries
+  // name/viewport/music/hold. (The verb strings the harness sugar and login
+  // macros use are executed by runStep/macroSteps — there is no scenario DSL.)
+  if (!/\.c?js$/i.test(positionals[0])) {
+    console.error(`SCENARIO_NOT_JS "${positionals[0]}" — a scenario must be a .spec.js (or .js/.cjs) module; the markdown and JSON formats were removed (see SKILL.md).`);
+    process.exit(1);
+  }
+  const mod = requireScenario(path.resolve(positionals[0]), raw);
+  const jsScenario = typeof mod === 'function' ? mod : (typeof mod.run === 'function' ? mod.run : null);
+  if (!jsScenario) throw new Error('JS scenario must export an async function (or { run, meta }) — see SKILL.md');
+  const meta = mod.meta || {};
+  const scenario = { name: meta.name || path.basename(positionals[0]), base: meta.base || null, holdMs: meta.hold, music: meta.music, viewport: meta.viewport };
   const base = values.base || scenario.base || 'http://localhost:3000';
   const cookieHost = scenario.cookieHost || new URL(base).host;
   const creds = values['no-auth'] ? null : repoConfig;
@@ -485,6 +458,14 @@ async function main() {
   // Redaction backstop: every variable value is treated as sensitive (short
   // ones excepted — redacting "1" would mangle unrelated output).
   SECRETS = Object.values(repoConfig?.variables || {}).map(String).filter((v) => v.length >= 4);
+  // The profile's `variables` map — the single home for per-repo credentials and
+  // config values (login macros already read it via $NAME) — exposed to the
+  // scenario as `vars` so an author references a value BY NAME (`vars.EMAIL`)
+  // and never embeds the literal. The saved scenario copy therefore stays
+  // faithful (redact() has nothing to scrub), and a model-free reproduce run
+  // gets the same values from the profile at runtime. Any value that still
+  // reaches a caption is caught by the redaction backstop (SECRETS, above).
+  const vars = { ...(repoConfig?.variables || {}) };
   const viewport = scenario.viewport || { width: 1280, height: 900 };
   const outDir = path.resolve(values.out);
   const framesDir = path.join(outDir, 'frames');
@@ -513,130 +494,106 @@ async function main() {
   const page = await ctx.newPage();
   const videoStartedAt = Date.now(); // recording starts with the page
   const results = [];
-  const rawHoldMs = scenario.holdMs;                  // set only by a `hold: <n>ms` line
-  const stepHoldMs = rawHoldMs ?? DEFAULT_HOLD_MS;     // per-step dwell in classic (no-checkpoint) mode
-  const celebrateMs = rawHoldMs ?? CHECKPOINT_HOLD_MS; // how long a passed checkpoint holds green
+  const celebrateMs = scenario.holdMs ?? CHECKPOINT_HOLD_MS; // how long a passed checkpoint holds green
   let musicTrack = values.music || scenario.music || MUSIC_TRACKS[Math.floor(Math.random() * MUSIC_TRACKS.length)];
   if (!MUSIC_TRACKS.includes(musicTrack)) {
     console.warn(`  (unknown music "${musicTrack}" — using lounge; choices: ${MUSIC_TRACKS.join(', ')})`);
     musicTrack = 'lounge';
   }
-  const total = scenario.steps.length;
-  // Checkpoints drive the video. The caption bar shows ONLY checkpoints: each
-  // goes in-progress, the plumbing steps leading to it run off-camera under that
-  // in-progress caption, then it flips green and holds a beat before the next
-  // one arms. A scenario with no checkpoints falls back to captioning every step.
-  const cpList = scenario.steps
-    .map((s, i) => (s.checkpoint ? { i, label: redact(stepLabel(s)) } : null))
-    .filter(Boolean);
-  const K = cpList.length;
-  const hasCheckpoints = K > 0;
-  const cpCaption = (p) => (K > 1 ? `${p + 1}/${K}  ${cpList[p].label}` : cpList[p].label);
   const dwell = (ms) => spinFrames(page, ms); // static hold that still repaints for the recorder
-  const snap = async (i, step, record) => {
-    const frame = path.join(framesDir, `${String(i + 1).padStart(2, '0')}-${step.action}.png`);
-    try { await page.screenshot({ path: frame, fullPage: false }); record.frame = frame; } catch {}
-  };
-  let nextCp = 0; // position in `checkpoints` of the next one not yet reached
   let failed = false;
   let reauthed = false;
-  let firstContentAtSec = 0; // used to trim the blank lead-in before step 1 rendered
-  // Bind the page and this run's profile badges to every caption update, so each
-  // call just says what to show and which state it is.
+  let firstContentAtSec = 0; // trims the blank lead-in before the first navigation rendered
+  // Bind the page and this run's profile badges to every caption update.
   const caption = (text, state, cp = false) => setCaption(page, text, state, cp, badges);
 
-  // Arm the first checkpoint's in-progress caption so it is already on screen as
-  // the opening plumbing runs (the pre-content lead-in is trimmed from the mp4).
-  if (hasCheckpoints) {
-    await caption(`⏳ ${cpCaption(0)}`, 'running', true);
-    await dwell(CHECKPOINT_INTRO_MS);
-  }
-
-  for (const [i, step] of scenario.steps.entries()) {
-    const n = String(i + 1).padStart(2, '0');
-    const isCheckpoint = !!step.checkpoint;
-    const label = redact(stepLabel(step));
-    const record = { n: i + 1, action: step.action, checkpoint: isCheckpoint, caption: label };
-
-    // Classic mode (no checkpoints): caption every step as it runs.
-    if (!hasCheckpoints) await caption(`⏳ ${i + 1}/${total}  ${label}`, 'running', false);
-
-    let error = null;
-    try {
+  { // ---- scenario harness ----------------------------------------------------
+    // The author's module drives; these helpers fire the caption/frame/verdict
+    // machinery, so a scenario yields a steps.json of checkpoints (each flagged,
+    // framed, and FAIL on any failed assertion). `page` is handed over for full
+    // Playwright power; the see*/click/fill/select sugar reuses runStep so the
+    // verb matching rules, click-highlight, and redaction all apply.
+    let cpIndex = 0;
+    let frameIdx = 0;
+    let lastCap = null; // last caption shown, so visit() can re-arm the chrome a navigation wiped
+    const cap = async (text, state, cp) => { lastCap = { text, state, cp }; await caption(text, state, cp); };
+    const snapJs = async (record, action) => {
+      frameIdx += 1;
+      const frame = path.join(framesDir, `${String(frameIdx).padStart(2, '0')}-${action}.png`);
+      try { await page.screenshot({ path: frame, fullPage: false }); record.frame = frame; } catch {}
+    };
+    // A checkpoint: the human-meaningful proof. `assert` runs Playwright (or the
+    // see* sugar) and THROWS on failure; a throw records the checkpoint red and
+    // FAILs the run, exactly like a false `see` assertion. The human caption
+    // lives in the closed shadow root, so it can never self-match the assertion.
+    const checkpoint = async (label, assert) => {
+      cpIndex += 1;
+      const text = redact(String(label));
+      const record = { n: results.length + 1, action: 'checkpoint', checkpoint: true, caption: text };
+      await cap(`⏳ ${cpIndex}  ${text}`, 'running', true);
+      await dwell(CHECKPOINT_INTRO_MS);
+      let error = null;
+      try { await assert(); } catch (e) { error = redact(e.message.split('\n')[0]); }
+      record.url = page.url();
+      const n = String(cpIndex).padStart(2, '0');
+      if (error) {
+        record.ok = false; record.error = error; failed = true;
+        console.error(`  ${n} FAIL ${text}\n     ${error}`);
+        await cap(`❌ ${cpIndex}  ${text}  FAIL`, 'fail', true);
+        await dwell(FAIL_HOLD_MS);
+        await snapJs(record, 'checkpoint');
+        results.push(record);
+        return false;
+      }
+      record.ok = true;
+      console.log(`  ${n} PASS ${text}`);
+      await cap(`✅ ${cpIndex}  ${text}`, 'pass', true);
+      await dwell(celebrateMs);
+      await snapJs(record, 'checkpoint');
+      results.push(record);
+      return true;
+    };
+    // visit(): navigate with the same auto-login retry as a plain goto, trim
+    // the video lead-in on the first navigation, then re-arm the caption chrome
+    // the navigation wiped.
+    const visit = async (p) => {
       try {
-        await runStep(page, step, base);
+        await runStep(page, { action: 'goto', path: p }, base);
       } catch (e) {
-        // Stale/absent session: log in through the form once and retry the step.
         if (values['no-auth'] || reauthed || !/^AUTH_FAILED/.test(e.message)) throw e;
         reauthed = true;
         await formLogin(page, base, cookieHost, creds);
-        await runStep(page, step, base);
+        await runStep(page, { action: 'goto', path: p }, base);
       }
+      if (firstContentAtSec === 0) firstContentAtSec = Math.max(0, (Date.now() - videoStartedAt) / 1000 - 0.4);
+      if (lastCap) await caption(lastCap.text, lastCap.state, lastCap.cp);
+    };
+    // Sugar over runStep: keeps runStep's exact matching semantics and the gold
+    // click cursor on camera. Authors can also reach for `page` directly.
+    const see = (text) => runStep(page, { action: 'expectText', text }, base);
+    const seeElement = (css) => runStep(page, { action: 'expect', selector: css }, base);
+    const seeButton = (label) => runStep(page, { action: 'expect', selector: `:is(input[type=submit][value*="${label}"], button:has-text("${label}"))` }, base);
+    const click = (css) => runStep(page, { action: 'click', selector: css }, base);
+    const clickText = (text) => runStep(page, { action: 'click', selector: `text=${text}` }, base);
+    const fill = (css, value) => runStep(page, { action: 'fill', selector: css, value }, base);
+    const select = (css, value) => runStep(page, { action: 'select', selector: css, value }, base);
+    const wait = (ms) => runStep(page, { action: 'waitMs', ms }, base); // clamped to the per-step cap
+
+    try {
+      await jsScenario({ page, base, checkpoint, visit, see, seeElement, seeButton, click, clickText, fill, select, wait, vars });
     } catch (e) {
-      error = redact(e.message.split('\n')[0]);
-    }
-    if (i === 0) firstContentAtSec = Math.max(0, (Date.now() - videoStartedAt) / 1000 - 0.4);
-    record.url = page.url();
-
-    if (error) {
-      // A failure — plumbing or checkpoint — is always shown on camera and
-      // recorded red, but the run CONTINUES so every remaining checkpoint (and
-      // later flows) still gets exercised and reported. The verdict is FAIL if
-      // any step failed.
-      record.ok = false;
-      record.error = error;
+      // An uncaught error OUTSIDE a checkpoint (e.g. a plumbing click that never
+      // resolved): record it red, snap a frame, and FAIL — the video still
+      // finalizes below rather than the process crashing.
       failed = true;
-      console.error(`  ${n} FAIL ${label}\n     ${error}`);
-      const failCaption = hasCheckpoints && !isCheckpoint
-        ? `❌ ${cpCaption(Math.min(nextCp, K - 1))}  —  FAILED: ${label}`
-        : hasCheckpoints
-          ? `❌ ${cpCaption(nextCp)}  FAIL`
-          : `❌ ${i + 1}/${total}  ${label}  FAIL`;
-      await caption(failCaption, 'fail', isCheckpoint || !hasCheckpoints);
+      const msg = redact(e.message.split('\n')[0]);
+      console.error(`  scenario error: ${msg}`);
+      const record = { n: results.length + 1, action: 'error', checkpoint: false, caption: 'scenario error', ok: false, error: msg, url: page.url() };
+      await cap(`❌ ${msg}`, 'fail', true).catch(() => {});
       await dwell(FAIL_HOLD_MS);
-      await snap(i, step, record);
+      await snapJs(record, 'error');
       results.push(record);
-      // A failed checkpoint is still "reached": advance past it and arm the
-      // next so the caption state machine stays aligned for the rest of the
-      // run. A failed plumbing step leaves the current checkpoint armed for the
-      // steps that follow it.
-      if (isCheckpoint) {
-        nextCp += 1;
-        if (nextCp < K) {
-          await caption(`⏳ ${cpCaption(nextCp)}`, 'running', true);
-          await dwell(CHECKPOINT_INTRO_MS);
-        }
-      }
-      continue;
     }
-
-    record.ok = true;
-    console.log(`  ${n} PASS ${label}`);
-
-    if (!hasCheckpoints) {
-      await caption(`✅ ${i + 1}/${total}  ${label}`, 'pass', false);
-      if (stepHoldMs > 0) await holdWithMotion(page, stepHoldMs);
-      else await dwell(0);
-      await snap(i, step, record);
-    } else if (isCheckpoint) {
-      // Celebrate: flip the in-progress caption green, hold it a beat, and
-      // capture this checkpoint's frame — the meaningful on-camera evidence.
-      await caption(`✅ ${cpCaption(nextCp)}`, 'pass', true);
-      await dwell(celebrateMs);
-      await snap(i, step, record);
-      nextCp += 1;
-      if (nextCp < K) { // arm the next checkpoint for the plumbing that follows
-        await caption(`⏳ ${cpCaption(nextCp)}`, 'running', true);
-        await dwell(CHECKPOINT_INTRO_MS);
-      }
-    } else {
-      // Plumbing: keep (and restore, since navigation wipes the chrome) the
-      // in-progress checkpoint caption. No dwell, no frame — it stays off-camera.
-      const done = nextCp >= K;
-      await caption(`${done ? '✅' : '⏳'} ${cpCaption(done ? K - 1 : nextCp)}`, done ? 'pass' : 'running', true);
-      await dwell(0);
-    }
-    results.push(record);
   }
 
   const video = page.video();
@@ -647,7 +604,7 @@ async function main() {
   if (video) {
     const webm = await video.path();
     videoPath = path.join(outDir, 'qa.mp4');
-    // Constant 30fps: real motion frames come from holdWithMotion/smooth
+    // Constant 30fps: real motion frames come from the dwell repaints/smooth
     // scrolling (the recorder only captures on repaint); fps=30 normalizes.
     // The lead-in before the first step's page rendered is trimmed inside the
     // filter graph (trim=start=… + setpts).

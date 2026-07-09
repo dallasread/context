@@ -74,12 +74,13 @@ done
 cat > "$PROFILE" <<EOF
 { "badge": { "pass": "$BADGES/pass.svg", "running": "$BADGES/run.svg", "fail": "$BADGES/pass.svg" } }
 EOF
-cat > "$TMPROOT/badge.md" <<EOF
-# badge wiring
-- visit /
-- see "Badge fixture" :: The page renders under the badge
+cat > "$TMPROOT/badge.spec.js" <<'EOF'
+module.exports = async ({ visit, checkpoint, see }) => {
+  await visit('/');
+  await checkpoint('The page renders under the badge', () => see('Badge fixture'));
+};
 EOF
-node "$RUN" "$TMPROOT/badge.md" --out "$TMPROOT/badgeout" --base "$BASE" --no-auth --repo zz-badge-test --music lounge >/dev/null 2>&1
+node "$RUN" "$TMPROOT/badge.spec.js" --out "$TMPROOT/badgeout" --base "$BASE" --no-auth --repo zz-badge-test --music lounge >/dev/null 2>&1
 rc=$?
 BJSON="$TMPROOT/badgeout/steps.json"
 chk "T5 runner exits zero with a badge"  "[ $rc -eq 0 ]"
