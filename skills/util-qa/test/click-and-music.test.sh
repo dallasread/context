@@ -86,6 +86,23 @@ BJSON="$TMPROOT/bogusout/steps.json"
 chk "T3 unknown track falls back to lounge" "[ \"\$(sj '$BJSON' 'd.music')\" = lounge ]"
 chk "T3 mp4 still encoded"                  "[ -s '$TMPROOT/bogusout/qa.mp4' ]"
 
+# --- T4: with NO --music, the default bed is DETERMINISTIC per scenario ------
+# A random default would make two runs of one scenario differ for no reason and
+# defeat a model-free --reproduce; the bed is hashed from the scenario name, so
+# the same scenario always lands on the same track.
+cat > "$TMPROOT/det.spec.js" <<'EOF'
+module.exports = async ({ visit, checkpoint, see }) => {
+  await visit('/');
+  await checkpoint('the reveal button is present', () => see('Reveal'));
+};
+module.exports.meta = { name: 'Deterministic bed check' };
+EOF
+node "$RUN" "$TMPROOT/det.spec.js" --out "$TMPROOT/det1" --base "$BASE" --no-auth >/dev/null 2>&1
+node "$RUN" "$TMPROOT/det.spec.js" --out "$TMPROOT/det2" --base "$BASE" --no-auth >/dev/null 2>&1
+M1=$(sj "$TMPROOT/det1/steps.json" 'd.music'); M2=$(sj "$TMPROOT/det2/steps.json" 'd.music')
+chk "T4 default track is a real bed"        "[ -n \"$M1\" ] && echo 'lounge twilight sunrise reggae ska' | grep -qw \"$M1\""
+chk "T4 same scenario -> same default bed"  "[ -n \"$M1\" ] && [ \"$M1\" = \"$M2\" ]"
+
 echo
 echo "# passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

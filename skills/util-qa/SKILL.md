@@ -32,6 +32,13 @@ Scripted browser QA with video evidence. **You are a runner, not an author.** Yo
 
    Evidence dir convention: `<project>/tmp/qa/<branch-name>/` (gitignored). The runner copies the scenario there, records `qa.mp4`, saves `frames/NN-<action>.png` after every step, and writes `steps.json` with the PASS/FAIL verdict. Exit 0 = all steps passed.
 
+   **Re-run a saved scenario with no model — `--reproduce`.** The scenario the reviewer authored persists in that evidence dir and is faithful (credentials are referenced through `vars`, never embedded), so it can be replayed without any authoring step or model in the loop — a human or a cron re-runs the exact QA. It resolves the scenario from the current branch's evidence dir, or from an explicit dir:
+
+   ```
+   ~/.claude/skills/util-qa/qa.sh --reproduce                 # replay tmp/qa/<branch>/scenario.spec.js
+   ~/.claude/skills/util-qa/qa.sh --reproduce <evidence-dir>  # replay a specific saved scenario
+   ```
+
 3. **Report the results.** State the verdict (PASS/FAIL), the per-checkpoint ✓/✗ checklist the run printed, and the evidence paths — **always surface the local `qa.mp4` path** (the primary evidence a human watches) plus the frames dir and evidence dir. Hand the evidence dir (`steps.json`, `qa.mp4`, `frames/`) to the caller and stop. You do **not** review the frames for bugs, author a `findings.json`, judge whether a passing frame "looks right", format a PR comment, or upload anything — reviewing the evidence for defects is the caller's job (the **review-dry** skill), and uploading is **util-gh-upload**'s. Report the run faithfully: if a step failed, say so with its frame; never soften a red run into a green one.
 
 ## Scenario format
@@ -39,7 +46,7 @@ Scripted browser QA with video evidence. **You are a runner, not an author.** Yo
 A scenario is a **`.spec.js` CommonJS module** that drives the run imperatively — the only scenario format. It exports an async function (or `{ run, meta }`) whose argument is the harness below, and runs through the full evidence engine: captions, per-checkpoint frames, video, music, badge, redaction, auto-login, and the `steps.json` verdict. The runner `require()`s the `.js`/`.cjs` module; `.ts` is NOT executed — write plain JS. (The markdown and JSON scenario formats were removed; the verb-string syntax survives only in login macros — see Auth.)
 
 ```js
-module.exports = async ({ page, base, visit, checkpoint, see, seeButton, seeElement, click, clickText, fill, select, wait }) => {
+module.exports = async ({ page, base, visit, checkpoint, see, seeButton, seeElement, click, clickText, fill, select, wait, vars }) => {
   await visit('/a/1/domains/example.com/registration/new');
 
   await checkpoint('Order summary shows the amount due today', () => see('Total due today'));
@@ -65,7 +72,8 @@ The harness:
 - **`checkpoint(caption, assertFn)`** is the unit that proves the change. `caption` is the human sentence burned on camera and collected as the QA narrative; `assertFn` is async and **throws to fail** (a passing assertion returns/resolves). Each checkpoint flips the caption green on pass / red on fail, holds a beat, and saves a frame — a failed checkpoint FAILs the run but execution continues to the next line.
 - **`visit(path)`** navigates with auto-login retry, trims the video lead-in on the first call, and re-arms the caption chrome the navigation wiped. Start with your real target `visit`; **never hardcode a login** — auto-login fires only when a step hits the login wall (see Auth).
 - **Sugar** — `see(text)`, `seeElement(css)`, `seeButton(label)`, `click(css)`, `clickText(text)`, `fill(css, value)`, `select(css, value)`, `wait(ms)` — compiles to the engine's steps, so the matching rules below, the 2s per-step cap, the gold click-cursor, and scroll-into-view all apply. Reach for the raw `page` when you need more than the sugar covers.
-- **`meta`** (optional): `name`, `viewport` `{width, height}`, `music`, `hold`; omitted values fall back to defaults. Credentials never appear in a scenario — auto-login supplies them, and the redaction backstop scrubs configured secret values from captions, `steps.json`, and console.
+- **`vars`** — the profile's `variables` map (the same one login macros read via `$NAME`), so a scenario that legitimately needs a configured value references it **by name** — `fill('#q', vars.EMAIL)`, `see(vars.EMAIL)` — and **never embeds the literal**. This keeps the saved scenario copy faithful (there is no secret in the source for redaction to scrub), which is what makes a later model-free `--reproduce` run replay it identically; the redaction backstop still scrubs any value that reaches a caption. Do NOT reference the login password here — auto-login owns the login step.
+- **`meta`** (optional): `name`, `viewport` `{width, height}`, `music`, `hold`; omitted values fall back to defaults. Credentials never appear in a scenario — auto-login supplies them, a value a scenario genuinely needs comes from `vars` (above), and the redaction backstop scrubs configured secret values from captions, `steps.json`, and console.
 
 **Checkpoints drive the video; the caption bar shows only them.** Choose captions a reader who doesn't know the code could still judge the feature by: "Order summary shows the amount due today", not "see the total". Each checkpoint appears in-progress (⏳, subdued bar, the profile's pending badge) and stays on screen while the plumbing between checkpoints runs off-camera; the moment its assertion passes it flips green (✅, gold left accent, larger type, the profile's success badge) and holds ~1s (tune with `meta.hold`) before the next one arms. So the video reads as a sequence of meaningful checks going green, not a scroll of every visit/click/fill. A frame PNG is saved for each checkpoint (and for a failing step); plumbing runs off-camera — no caption change, no frame, and **no `steps.json` entry** (only checkpoints are recorded). Checkpoints are flagged `"checkpoint": true` in `steps.json` and printed as a ✓/✗ checklist at the end of the run — that checklist *is* the QA narrative and drops straight into a PR's QA section. Give every behavior you set out to prove its own checkpoint. A checkpoint whose assertion throws still fails the run; the friendly caption, living in the closed shadow root, never self-matches a `see`. An **uncaught error outside a checkpoint** (a plumbing `click` whose target never appears) is captured as a failed step and FAILs the run — the video still finalizes — rather than crashing; wrap plumbing in your own `try` to soldier on.
 
@@ -101,7 +109,7 @@ Fully automatic and per-repo: login is the repo's `login` macro. On a stale or m
 
 The JSON takes `variables` (values referenced in steps as `$NAME` — credentials live here), the `macros.login` steps, plus optional keys: `sessionCookie` (when unset, ALL post-login cookies are persisted), `extraCookies` written alongside the session (e.g. an app's interstitial-bypass cookie), and `badge` (per-state corner SVGs — see REFERENCE.md). `chmod 600` it.
 
-**Credentials never appear in evidence.** Scenarios must not contain credentials (auto-login makes that unnecessary), and as a backstop the runner redacts the configured email/password values from everything it emits — captions, steps.json, console output, and the scenario copy in the evidence dir — so posted QA evidence cannot leak them. Note the login itself can appear on camera when a session was stale (password fields are browser-masked); rerun for a login-free recording if that matters.
+**Credentials never appear in evidence.** Scenarios must not contain credentials (auto-login makes that unnecessary); a config value a scenario genuinely needs is read from the `vars` harness key by name (see Scenario format), never embedded. As a backstop the runner redacts the configured variable values from everything it emits — captions, steps.json, console output, and the scenario copy in the evidence dir — so posted QA evidence cannot leak them. Note the login itself can appear on camera when a session was stale (password fields are browser-masked); rerun for a login-free recording if that matters.
 
 Manual fallback if form login ever breaks: `node ~/.claude/skills/util-qa/save-cookie.js --host <host:port> --name _dnsimple_session --value '<paste>'`.
 
@@ -116,6 +124,10 @@ Not QA's job. Formatting the evidence into a PR comment is the **review-dry** sk
 ## First run on a repo
 
 QA needs a per-repo config at `profiles/<repo>.json` before it can boot a repo; qa.sh hard-fails with `QA_CONFIG_MISSING` when it is absent. Authoring that config (and the optional `profiles/<repo>.md` facts file) is a once-per-repo onboarding task, not a per-run one, so its full schema, the profile-markdown template, and the fresh-worktree setup live in [REFERENCE.md](REFERENCE.md). Read it the first time you QA a repo, or when a run stops with `QA_CONFIG_MISSING`. A repo that already has a profile never needs it.
+
+## Maintaining the runner
+
+**Environment quirks are encoded, never re-derived per run.** When the runner must assume something about the host — the app's package `type`, an available binary, a path convention, the scenario's module shape — that assumption lives in code with a boundary test in `test/`, never as a per-run "here's the workaround" note the caller rediscovers each time. A recurring note of that kind is a bug: encode it and add the test. The ESM `.cjs` loader (`requireScenario`, guarded by the `type:module` case in `test/js-scenario.test.sh`) is the template; the other host seams — a non-JS scenario path, a scenario that doesn't export a function, a repo with no profile — are pinned in `test/boundary.test.sh`.
 
 ## Failure modes
 

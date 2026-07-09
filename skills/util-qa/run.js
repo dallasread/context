@@ -495,7 +495,13 @@ async function main() {
   const videoStartedAt = Date.now(); // recording starts with the page
   const results = [];
   const celebrateMs = scenario.holdMs ?? CHECKPOINT_HOLD_MS; // how long a passed checkpoint holds green
-  let musicTrack = values.music || scenario.music || MUSIC_TRACKS[Math.floor(Math.random() * MUSIC_TRACKS.length)];
+  // Default the bed DETERMINISTICALLY from the scenario name (a stable string
+  // hash) rather than at random: a random pick would make two runs of the same
+  // scenario differ for no reason, and a model-free `--reproduce` should replay
+  // identically down to the music. Distinct scenarios still get varied beds; an
+  // explicit --music / meta.music always wins.
+  const strHash = (s) => { let h = 0; for (let i = 0; i < s.length; i += 1) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0; return Math.abs(h); };
+  let musicTrack = values.music || scenario.music || MUSIC_TRACKS[strHash(String(scenario.name)) % MUSIC_TRACKS.length];
   if (!MUSIC_TRACKS.includes(musicTrack)) {
     console.warn(`  (unknown music "${musicTrack}" — using lounge; choices: ${MUSIC_TRACKS.join(', ')})`);
     musicTrack = 'lounge';
