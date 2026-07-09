@@ -9,7 +9,7 @@ Produce a ready-to-ship PR draft the user can read before anything touches GitHu
 
 ## Workflow
 
-1. Use your memory.
+1. Use your memory — recall the relevant project memory (conventions, prior decisions, constraints) before drafting.
 2. Ensure there are no related uncommitted items.
 3. Run the **review-dry** skill over the branch — the four lenses plus its mandatory live QA. Fix or surface what it finds before drafting. Skip its comment draft (the PR description below is this skill's deliverable), but keep its QA evidence dir: the 👓 QA section renders from it.
 4. Draft the PR title and description using the repo's pull request template (`.github/pull_request_template.md`), completing every section — the review/qa block takes over the template's QA section (see below). Title carries no issue IDs — linkage goes in the body ("Fixes #1234" / "Belongs to #1234").
@@ -18,7 +18,7 @@ Produce a ready-to-ship PR draft the user can read before anything touches GitHu
 ## Description sections
 
 - **👓 QA** — the review/qa evidence block takes over the PR template's QA section. When the template has a QA section, replace it wholesale — heading and body both — with this section; when the template has no QA section, add this one (whenever the change has a visible surface; omit entirely for pure backend/refactor/docs). The section is `## 👓 QA`, and it has two parts:
-  - **The evidence block, on top** — the review-dry QA block verbatim: the SAME canonical template, rendered by the **review-dry** skill's formatter from the evidence dir the review-dry run produced (or a direct util-qa run), asking it for the `## 👓 QA` heading (video style by default — count line, ✅/⚠️ checkpoint checklist, video, collapsed script; frame-by-frame only when the user asks). Never hand-written, so it reads identically to a review comment's QA block.
+  - **The evidence block, on top** — the review-dry QA block verbatim: hand the evidence dir (the one the review-dry run produced, or a direct util-qa run) to the **review-dry** skill and ask it for the `## 👓 QA` section; it renders the same block a review comment uses (video style by default, frame-by-frame on request). Never hand-written, so it reads identically to a review comment's QA block.
   - **A manual-verification walkthrough, below the video** — a lead line naming the start command (check the README, e.g. `bin/dev`) and the local base URL, then one bullet per page giving its local URL and what to check there by hand. Name any residual gap the run could not cover (sandbox-only flows, request-spec-only coverage) here too. Because util-qa persists the authored scenario with the evidence, this same QA can be replayed later with no model in the loop — a model-free re-verification of the PR's evidence.
 
   In the dry draft, render the evidence block with local evidence paths. When the user asks to actually create the PR, publish the evidence with the **util-gh-upload** skill (create the PR first so there's a page to attach to), re-render the block with the hosted URLs, and follow its consent rule.
@@ -29,5 +29,5 @@ Produce a ready-to-ship PR draft the user can read before anything touches GitHu
 
 ## Finishing touches
 
-- Label the PR: every PR carries `bug` or `enhancement`.
+- Label the PR per the repo's convention (dnsimple-app uses `bug` or `enhancement`).
 - Assign it.

@@ -26,10 +26,10 @@ Uploads need an existing PR page to attach to — for a not-yet-created PR (pr-d
 
 - `NOT_LOGGED_IN` — ask the user to run the `--login` command above (real browser, 2FA). Never fabricate cookie values.
 - Upload failure — a GitHub DOM change breaks it loudly; fall back to giving the user the local file paths for manual drag-drop.
-- Module resolution — this skill has no npm footprint; Playwright is borrowed from the **util-qa** skill's installation. If it cannot be resolved, run the util-qa skill once — it installs its own dependencies.
+- Module resolution — this skill has no npm footprint; it depends on the **util-qa** skill's Playwright setup. If Playwright cannot be resolved, run the util-qa skill once to provision it.
 
 ## Callers
 
 - **review-dry** — uploads the frames and video its posted comment needs.
-- **pr-dry** — uploads 👓 Preview evidence once the PR exists.
-- **qa** — never uploads; it stops at the evidence dir.
+- **pr-dry** — uploads 👓 QA evidence once the PR exists.
+- **util-qa** — never uploads; it stops at the evidence dir.
