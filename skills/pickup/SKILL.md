@@ -1,16 +1,14 @@
 ---
 name: pickup
-description: Pick up a ticket or feature description for implementation. Plan first - ask questions, agree on entrypoint, preconditions, and side-effects - then create a worktree off a fresh main to implement in. Use when handed a ticket or a description of a thing to build.
+description: Picks up a ticket or feature description and drives it to implementation — plan and agree the entrypoint, preconditions, and side-effects first, then create a worktree off a fresh main to build in. Use when handed a ticket or a description of a thing to build.
 ---
 
-I'm gonna give you a description of a thing to implement (or a ticket). Use the proper issue template.
+Take the ticket or description of the thing to implement. If it needs a ticket, issue templates live in the repo's `.github/ISSUE_TEMPLATE` — check there.
 
-Let's plan it out.
+Plan first. Ask how the user would like it implemented in the existing project, and include suggestions.
 
-Ask me questions on how I would like it implemented in the existing project. Include suggestions.
+Most importantly, agree on the entrypoint, preconditions, and side-effects — and where the side-effects and preconditions need to take place.
 
-Most importantly, let's agree on the entrypoint, preconditions, side-effects and where the side-effects and preconditions need to take place.
-
-Then, create a new worktree off a fresh main and we'll work on the implementation.
+Only after that agreement, create a new worktree off a fresh main to work on the implementation.
 
 DO NOT COMMIT, STAGE, OR PUSH UNTIL ASKED. IF YOU CAN'T FIND RELATED PROJECTS OR ISSUES, ASK CLARIFYING QUESTIONS.
