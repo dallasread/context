@@ -20,6 +20,7 @@
 # here never leaves this machine — e.g. skills/roundtable stays private.
 !skills
 skills/*
+!skills/README.md
 !skills/util-qa
 !skills/util-qa/**
 !skills/review-dry
