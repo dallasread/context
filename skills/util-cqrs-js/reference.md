@@ -174,6 +174,8 @@ class EventStore {
 }
 ```
 
+> **Two `track` signatures.** The `EventStore.track(collection, objectId, action, data, time, version)` shown above is the low-level append. The `track` you call on `Commands` and on the multi-store classes takes a leading `dbId`/`journey` first - `track(dbId, collection, objectId, action, data)` - which selects the right tenant store and then delegates to this `EventStore.track`.
+
 ### UUID Generation
 
 **Important:** UUID generation is centralized in the Event Store, not in Commands.
@@ -429,11 +431,10 @@ export default {
     }
   },
 
-  // Custom runner for completing a task
+  // Custom runner for completing a task (timestamp-based state; see Timestamp-Based State Pattern)
   'tasks.complete'(event) {
     const task = this.tasks.find(item => item.id === event.objectId)
     if (task) {
-      task.complete = true
       task.completedAt = event.time
     }
   },
@@ -580,9 +581,9 @@ EventStore.RUNNERS = {
 }
 ```
 
-### Multi-Store Pattern
+### Multi-Store Pattern (minimal sketch)
 
-For multi-tenant applications, use separate event stores:
+The simplest possible multi-store: a map of `journeyId -> EventStore`. It is shown only to introduce the idea. For real applications, prefer the **MultipleEventStore Pattern (Recommended)** below, which the Commands and Queries throughout this guide assume (its `findAll(dbId, collection)` API, `createDB`, and root config DB).
 
 ```javascript
 class MultiEventStore {
@@ -613,9 +614,9 @@ class MultiEventStore {
 }
 ```
 
-### MultipleEventStore Pattern (Extended)
+### MultipleEventStore Pattern (Recommended)
 
-For applications with account-based isolation where each account needs its own database:
+This is the recommended multi-store. For applications with account-based isolation where each account needs its own database:
 
 ```javascript
 import { v4 as uuidv4 } from 'uuid'
@@ -2317,11 +2318,10 @@ Only access `app.queries` or `app.commands` in tests when:
 
 ### Naming Conventions
 
-1. **Boolean properties**: Always use `is`, `has`, or `should` prefix
-   - ✅ `isRead`, `isDeleted`, `isActive`, `isComplete`
-   - ✅ `hasChildren`, `hasPermission`
-   - ✅ `shouldSync`, `shouldNotify`
-   - ❌ `read`, `deleted`, `active`, `complete`
+1. **Boolean properties**: When a value is a genuine boolean, use an `is`, `has`, or `should` prefix, never a bare adjective:
+   - ✅ `isSystem`, `isDefault`, `hasChildren`, `hasPermission`, `shouldSync`, `shouldNotify`
+   - ❌ `system`, `default`, `children`, `sync`
+   - This rule is only for values that really are booleans (static traits). State that changes over time, such as read, paused, or completed, is not a boolean at all: use a timestamp instead (see [Timestamp-Based State Pattern](#timestamp-based-state-pattern)), so `readAt`/`completedAt`, not `isRead`/`isComplete`.
 
 2. **Command methods**: Use imperative present tense
    - ✅ `addEmail()`, `markEmailAsRead()`, `updateAccount()`
@@ -2480,7 +2480,7 @@ export default {
 
   'todos.complete'(event) {
     const todo = this.todos.find(t => t.id === event.objectId)
-    if (todo) todo.complete = true
+    if (todo) todo.completedAt = event.time  // timestamp-based state, not a boolean
   }
 }
 ```
@@ -2526,7 +2526,7 @@ export class Queries {
 
   incompleteTodos() {
     return this.allTodos()
-      .filter(todo => !todo.complete)
+      .filter(todo => !todo.completedAt)
   }
 }
 ```
