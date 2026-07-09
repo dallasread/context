@@ -56,6 +56,9 @@ printf "module.exports = async ({ visit, checkpoint, see }) => {\n  await visit(
 cat > "$FRUN/findings.json" <<'EOF'
 [ { "severity": "minor", "summary": "Footer overlaps the total at mobile widths", "frame": "05-scroll.png", "forReview": "check the flex-wrap in OrderSummary.css" } ]
 EOF
+# The cited frame must exist under frames/ — format.js now validates that a
+# findings.json entry names a frame that was actually captured.
+: > "$FRUN/frames/05-scroll.png"
 
 # ---------- VIDEO style (default) ------------------------------------------
 node "$FMT" "$FRUN" --assets "$TMP/assets.json" \

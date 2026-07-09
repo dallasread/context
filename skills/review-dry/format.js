@@ -42,6 +42,55 @@ const path = require('node:path');
 const PASS_ICON = '✅';
 const FLAG_ICON = '⚠️';
 
+// The four severities, highest first — this is both the render sort order for
+// findings and the closed set a findings.json entry may name.
+const SEVERITY_RANK = { blocker: 0, major: 1, minor: 2, nit: 3 };
+
+// Stop the run on a malformed findings.json — a specific message on stderr and
+// a non-zero exit. The whole point: a bad findings file (from any author) must
+// fail LOUDLY here, not degrade quietly into a wrong or empty QA comment.
+// @param {string} msg the specific breach, naming the offending entry
+// @return {never}
+function bail(msg) {
+  console.error(`format.js: ${msg}`);
+  process.exit(1);
+}
+
+// Load and validate <dir>/findings.json — the observations the reviewer authored
+// from the frames. The file is optional (absent → no findings), but when present
+// it is a contract, not a hint: a JSON array whose every entry names a severity
+// (from SEVERITY_RANK), a one-sentence summary, and a frame basename that was
+// actually captured under frames/. That last check catches the common real
+// mistake — a cited frame that was never shot — before it becomes a dead image
+// link in the comment. Any breach is fatal via bail().
+// @param {string} dir evidence directory (holds findings.json and frames/)
+// @return {Array<{severity: string, summary: string, frame: string}>}
+function loadFindings(dir) {
+  const fp = path.join(dir, 'findings.json');
+  if (!fs.existsSync(fp)) return [];
+  let authored;
+  try {
+    authored = JSON.parse(fs.readFileSync(fp, 'utf8'));
+  } catch (e) {
+    bail(`findings.json is not valid JSON — ${e.message}`);
+  }
+  if (!Array.isArray(authored)) bail('findings.json must be a JSON array of findings');
+  authored.forEach((f, i) => {
+    const at = `findings.json entry ${i}`;
+    if (!f || typeof f !== 'object' || Array.isArray(f)) bail(`${at} is not an object`);
+    for (const key of ['severity', 'summary', 'frame']) {
+      if (!f[key]) bail(`${at} is missing "${key}" — all three are required`);
+    }
+    if (!(String(f.severity).toLowerCase() in SEVERITY_RANK)) {
+      bail(`${at} has an unknown severity "${f.severity}" — use blocker | major | minor | nit`);
+    }
+    if (!fs.existsSync(path.join(dir, 'frames', path.basename(f.frame)))) {
+      bail(`${at} cites frame "${f.frame}" but no such file exists under frames/`);
+    }
+  });
+  return authored;
+}
+
 // Escape text for safe inclusion in HTML table cells, <summary>, and alt="".
 // @param {*} s value to escape
 // @return {string} HTML-safe string
@@ -110,21 +159,14 @@ function collectFindings(manifest, dir) {
       frame: failing.frame ? path.basename(failing.frame) : undefined,
     });
   }
-  const fp = path.join(dir, 'findings.json');
-  if (fs.existsSync(fp)) {
-    let authored = [];
-    try { authored = JSON.parse(fs.readFileSync(fp, 'utf8')); } catch { authored = []; }
-    for (const f of Array.isArray(authored) ? authored : []) {
-      if (!f || !f.summary) continue;
-      findings.push({
-        severity: String(f.severity || 'major').toLowerCase(),
-        summary: f.summary,
-        frame: f.frame ? path.basename(f.frame) : undefined,
-      });
-    }
+  for (const f of loadFindings(dir)) {
+    findings.push({
+      severity: String(f.severity).toLowerCase(),
+      summary: f.summary,
+      frame: path.basename(f.frame),
+    });
   }
-  const rank = { blocker: 0, major: 1, minor: 2, nit: 3 };
-  return findings.sort((a, b) => (rank[a.severity] ?? 9) - (rank[b.severity] ?? 9));
+  return findings.sort((a, b) => (SEVERITY_RANK[a.severity] ?? 9) - (SEVERITY_RANK[b.severity] ?? 9));
 }
 
 // Render one <tr>: number, result glyph, and the expandable proof cell.
@@ -248,6 +290,9 @@ function main() {
     process.exit(1);
   }
   const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'steps.json'), 'utf8'));
+  // Validate findings.json up front — every mode, not just --list-frames — so a
+  // malformed file stops the run before any comment.md is written.
+  loadFindings(dir);
 
   if (values['list-frames']) {
     for (const f of framesToUpload(manifest, dir, values.frames)) console.log(f);
