@@ -42,9 +42,10 @@ const path = require('node:path');
 const PASS_ICON = '✅';
 const FLAG_ICON = '⚠️';
 
-// The four severities, highest first — this is both the render sort order for
-// findings and the closed set a findings.json entry may name.
-const SEVERITY_RANK = { blocker: 0, major: 1, minor: 2, nit: 3 };
+// The severities, highest first — this is both the render sort order for
+// findings and the closed set a findings.json entry may name. There is no `nit`
+// tier: the review never reports nits, so a nit-level finding has no home here.
+const SEVERITY_RANK = { blocker: 0, major: 1, minor: 2 };
 
 // Stop the run on a malformed findings.json — a specific message on stderr and
 // a non-zero exit. The whole point: a bad findings file (from any author) must
@@ -82,7 +83,7 @@ function loadFindings(dir) {
       if (!f[key]) bail(`${at} is missing "${key}" — all three are required`);
     }
     if (!(String(f.severity).toLowerCase() in SEVERITY_RANK)) {
-      bail(`${at} has an unknown severity "${f.severity}" — use blocker | major | minor | nit`);
+      bail(`${at} has an unknown severity "${f.severity}" — use blocker | major | minor (the review never reports nits)`);
     }
     if (!fs.existsSync(path.join(dir, 'frames', path.basename(f.frame)))) {
       bail(`${at} cites frame "${f.frame}" but no such file exists under frames/`);

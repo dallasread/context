@@ -29,7 +29,7 @@ Full-template pull request review with live QA evidence. You (Claude) check out 
 
 5. **Once the user approves the plan, run QA — then review the frames yourself and record what you find** (see Findings and provenance below). Hand the scenario to the **util-qa** skill and iterate it to faithfulness: fix your own artifacts (a wrong selector, a missing wait) so the run is honest, keeping the run warm so re-runs are cheap — but a genuine product failure stays red and becomes a finding; never reshape the scenario to turn a real red green, and "the tests pass" / "the HTML looks right" is no substitute for a real run. util-qa hands you a bare evidence dir — `steps.json` (the checkpoint verdict), `qa.mp4`, and `frames/` — and no judgement. Read the frame PNGs and check the UI actually looks right: assertions prove presence, not layout, so a green run with a broken-looking frame is a FAIL — say so. Look beyond the assertions for bugs — misaligned or overflowing layout, wrong/placeholder copy, stale or duplicated data, an off-by-one count, a control that should be disabled but isn't — and re-ask the observable lens questions (e) of each frame. **Write every defect you spot into `<qa-dir>/findings.json`** (schema below); that file feeds the comment's frame uploads and the failing-frame embed. If a frame is broken because the script itself is wrong (bad selector, missing wait), fix the script and re-run — don't log a runner artifact as a product bug.
 
-6. **Synthesize Top points**: a maximum of four terse points in ELI5, prioritized by importance — do not spam the builder. Be absolutely clear on what any potential issues are and provide examples. Also form one refactoring suggestion that would make the change cleaner; it enters the draft only if it clears a 75/100 usefulness bar.
+6. **Synthesize Top points**: a maximum of four terse points in ELI5, prioritized by importance — do not spam the builder. Be absolutely clear on what any potential issues are and provide examples. Also form one refactoring suggestion that would make the change cleaner; it enters the draft only if it clears a 75/100 usefulness bar. **Never report nits.** Trivial, cosmetic, or purely stylistic points are dropped entirely — not in Top points, not in the four-lens chat output. Findings are `blocker`, `major`, or `minor` only; if a point is only a nit, it does not belong in the review at all. (The refactor suggestion is not a nit: it must clear the 75/100 bar to appear, and rides as the lowest-priority `minor`.)
 
 7. **Draft the comment** from the canonical template below and show it to the user in chat (or write it to `<qa-dir>/draft.md`). A draft publishes nothing — no uploads, no `gh`, no browser. Then stop.
 
@@ -51,7 +51,7 @@ Every finding carries a provenance tag in the drafted comment, because the reade
 ]
 ```
 
-- `severity` — `blocker` | `major` | `minor` | `nit`.
+- `severity` — `blocker` | `major` | `minor`. There is no `nit` level: the review never reports nits, and `format.js` rejects a `nit` finding.
 - `summary` — one sentence describing the on-screen symptom, not a guess about the code.
 - `frame` — the frame basename that shows it (from `frames/`); this is the evidence, so include it.
 
@@ -120,14 +120,14 @@ If the pull request is facing customers, review it from the perspective of poten
 **Every drafted or posted comment uses this exact structure — no sections reordered, renamed, or silently omitted.** The visual spec is the approved mock: https://claude.ai/code/artifact/4bb8a30a-a135-449e-929c-eaaf8b63f3d8. GitHub's sanitizer strips `class`/`style`, so no color survives: provenance and severity ride in text tags, and the failing table row reads by sorting first, opening its `<details>`, and carrying ⚠️.
 
 ```markdown
-**<Verdict>** — <one-line tally, e.g. "1 blocker, a server-side gap, and 2 nits">. <sub>verified against <a href="https://github.com/<owner>/<repo>/commit/<sha>"><sha></a></sub>
+**<Verdict>** — <one-line tally, e.g. "1 blocker, a server-side gap, and 2 minor issues">. <sub>verified against <a href="https://github.com/<owner>/<repo>/commit/<sha>"><sha></a></sub>
 
 ### Top points
 
 1. **[QA · blocker]** <symptom observed on screen, naming its checkpoint; link the uploaded frame when posted>
 2. **[code · major]** <finding backed by `file:line`>
 3. **[QA · minor]** <...>
-4. **[code · nit]** <the refactor suggestion, if it clears the 75/100 bar>
+4. **[code · minor]** <the refactor suggestion, if it clears the 75/100 bar — always the lowest-priority point>
 
 ### 👓 QA
 
@@ -137,7 +137,7 @@ If the pull request is facing customers, review it from the perspective of poten
 Rules:
 
 - **The lead** is one line: a verdict ("Requesting changes" / "Looks good" / "Comment"), the tally, and `verified against <sha>` linking the commit (`git rev-parse --short=7 HEAD`). Use the 7-character abbreviation — that is the short form GitHub renders commit SHAs as, so the displayed text matches GitHub's own; the href may carry the same 7-char sha (GitHub resolves it). Always include the sha — a pasted comment freezes while the PR moves on, so a reader must know which tree the evidence covers.
-- **Top points** is the single merged, prioritized list — max four, ELI5. Every point carries a provenance tag: `[QA · <severity>]` for frame-backed observations (from `findings.json` and failed checkpoints), `[code · <severity>]` for diff findings (with `file:line`). Severities: blocker | major | minor | nit. Every `findings.json` entry and every failed checkpoint must surface here; if more than four points survive triage, the four most severe go in, the tally says so, and the rest stay in the chat review. The refactor suggestion, when it clears the bar, takes a `[code · nit]` slot.
+- **Top points** is the single merged, prioritized list — max four, ELI5. Every point carries a provenance tag: `[QA · <severity>]` for frame-backed observations (from `findings.json` and failed checkpoints), `[code · <severity>]` for diff findings (with `file:line`). Severities: blocker | major | minor — never nit (nits are not reported anywhere). Every `findings.json` entry and every failed checkpoint must surface here; if more than four points survive triage, the four most severe go in, the tally says so, and the rest stay in the chat review. The refactor suggestion, when it clears the bar, takes the lowest-priority `[code · minor]` slot.
 - **👓 QA** is `format.js` output, untouched, in one of two styles. **Video (the default):** count line, a terse ✅/⚠️ checkpoint checklist, the failing checkpoint's frame embedded only when there is one, the video inline, then **below it the QA script in a collapsible `<details>`** — always present whenever there is a video, never omitted (the draft and the post both pass `--scenario`, so the reader can expand exactly what was driven). **Frame-by-frame (`--frames`):** the checkpoint table (failing rows first, `<details open>`, ⚠️) with the collapsed 🎬 Video & QA script block — this is the style the approved mock shows. Use `--frames` only when the user asks for a frame-by-frame review; never hand-edit either form. The formatter also serves other surfaces: `--heading` swaps the heading line, which is how pr-dry takes over a PR description's QA section — rendering it as a `## 👓 QA` section from the same evidence.
 - **If QA was skipped** (the app genuinely could not boot — the only sanctioned reason), the `### 👓 QA` section instead contains one paragraph saying so and what you did instead. It is never silently omitted, and no `[QA · …]` tags may appear in Top points.
 - Never blur provenance: a QA symptom is not a proven code cause, and a code-read finding is not a QA observation.

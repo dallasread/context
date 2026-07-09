@@ -3,7 +3,8 @@
 # findings file must fail LOUDLY — a specific, entry-named error on stderr and a
 # non-zero exit — instead of silently degrading into a wrong or empty QA comment.
 # findings.json is a JSON ARRAY of { severity, summary, frame }, all three keys
-# required per entry; severity is blocker|major|minor|nit; frame is a basename
+# required per entry; severity is blocker|major|minor (never nit — the review
+# does not report nits, so a nit finding is rejected); frame is a basename
 # that actually exists under the evidence dir's frames/. Any author (Claude or
 # not) that writes a bad file gets stopped here. Pure Node + fs.
 set -u
@@ -87,6 +88,13 @@ ERR=$(node "$FMT" "$US" 2>&1 >/dev/null); rc=$?
 chk "unknown-severity: exits non-zero"   "[ $rc -ne 0 ]"
 chk "unknown-severity: names the value"  "echo \"\$ERR\" | grep -q 'critical'"
 chk "unknown-severity: entry named"      "echo \"\$ERR\" | grep -q 'entry 0'"
+
+# --- `nit` is rejected: the review never reports nits ------------------------
+NIT="$TMP/nit-sev"; mkrun "$NIT"
+echo '[ { "severity": "nit", "summary": "x", "frame": "05-scroll.png" } ]' > "$NIT/findings.json"
+ERR=$(node "$FMT" "$NIT" 2>&1 >/dev/null); rc=$?
+chk "nit-severity: exits non-zero"       "[ $rc -ne 0 ]"
+chk "nit-severity: rejected as unknown"  "echo \"\$ERR\" | grep -q 'nit'"
 
 # --- a cited frame that was never captured -----------------------------------
 NF="$TMP/no-frame"; mkrun "$NF"
