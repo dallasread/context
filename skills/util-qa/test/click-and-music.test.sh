@@ -88,7 +88,7 @@ chk "T3 mp4 still encoded"                  "[ -s '$TMPROOT/bogusout/qa.mp4' ]"
 
 # --- T4: with NO --music, the default bed is DETERMINISTIC per scenario ------
 # A random default would make two runs of one scenario differ for no reason and
-# defeat a model-free --reproduce; the bed is hashed from the scenario name, so
+# defeat a model-free re-run; the bed is hashed from the scenario name, so
 # the same scenario always lands on the same track.
 cat > "$TMPROOT/det.spec.js" <<'EOF'
 module.exports = async ({ visit, checkpoint, see }) => {

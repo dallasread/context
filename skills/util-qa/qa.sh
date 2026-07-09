@@ -77,13 +77,12 @@ stop_warm() {
 }
 
 # --- argument parsing -----------------------------------------------------
-KEEP=""; FRESH=""; SCENARIO=""; OUT=""; OVERRIDE=""; REPRODUCE=""
+KEEP=""; FRESH=""; SCENARIO=""; OUT=""; OVERRIDE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --stop)  stop_warm; exit 0 ;;
     --keep)  KEEP=1; shift ;;
     --fresh) FRESH=1; shift ;;
-    --reproduce) REPRODUCE=1; shift ;;
     --)      shift; OVERRIDE=$*; break ;;
     *)
       if   [ -z "$SCENARIO" ]; then SCENARIO=$1
@@ -92,27 +91,6 @@ while [ $# -gt 0 ]; do
       shift ;;
   esac
 done
-
-# --reproduce: re-run a prior run's SAVED scenario with NO authoring step — the
-# model-free path. The scenario the reviewer authored is already persisted (and
-# faithful, since credentials are referenced as vars, not embedded), so replaying
-# it needs no model at all. Resolve it from the branch's evidence dir
-# (tmp/qa/<branch>/), or from an explicit dir passed as the positional, and run it
-# in place. Warm-server flags (--keep/--fresh) still apply.
-if [ -n "$REPRODUCE" ]; then
-  QA_DIR=${SCENARIO:-$WORKTREE/tmp/qa/$(git branch --show-current 2>/dev/null)}
-  if [ -f "$QA_DIR/scenario.spec.js" ]; then
-    SCENARIO="$QA_DIR/scenario.spec.js"
-  else
-    SCENARIO=$(ls "$QA_DIR"/*.spec.js 2>/dev/null | head -1)
-  fi
-  [ -n "$SCENARIO" ] && [ -f "$SCENARIO" ] || {
-    echo "REPRODUCE_NO_SCENARIO — no *.spec.js under $QA_DIR; run a review/QA there first, or pass its evidence dir" >&2
-    exit 2
-  }
-  OUT="$QA_DIR"
-  echo "reproduce: $SCENARIO"
-fi
 
 # Repo name = origin remote's repository name (canonical, stable across
 # worktrees and local directory names), falling back to the main checkout's
