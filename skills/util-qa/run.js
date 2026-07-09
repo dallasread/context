@@ -579,7 +579,10 @@ async function main() {
     record.url = page.url();
 
     if (error) {
-      // A failure — plumbing or checkpoint — is always shown and stops the run.
+      // A failure — plumbing or checkpoint — is always shown on camera and
+      // recorded red, but the run CONTINUES so every remaining checkpoint (and
+      // later flows) still gets exercised and reported. The verdict is FAIL if
+      // any step failed.
       record.ok = false;
       record.error = error;
       failed = true;
@@ -593,7 +596,18 @@ async function main() {
       await dwell(FAIL_HOLD_MS);
       await snap(i, step, record);
       results.push(record);
-      break;
+      // A failed checkpoint is still "reached": advance past it and arm the
+      // next so the caption state machine stays aligned for the rest of the
+      // run. A failed plumbing step leaves the current checkpoint armed for the
+      // steps that follow it.
+      if (isCheckpoint) {
+        nextCp += 1;
+        if (nextCp < K) {
+          await caption(`⏳ ${cpCaption(nextCp)}`, 'running', true);
+          await dwell(CHECKPOINT_INTRO_MS);
+        }
+      }
+      continue;
     }
 
     record.ok = true;

@@ -65,5 +65,20 @@ git -C "$MAIN" ls-files --others --ignored --exclude-standard --directory \
 mkdir -p "$WT/log"
 [ -f "$MAIN/log/development.log" ] && touch "$WT/log/development.log" && echo "touch log/development.log"
 
-[ -e "$MAIN/node_modules" ] && [ ! -d "$WT/node_modules" ] && echo "NOTE: node_modules missing — install it in the worktree (never symlink)"
+# node_modules: never symlink (breaks vite /@fs), but a copy-on-write clone is
+# real files and near-free on APFS/btrfs. Only clone when yarn.lock is identical
+# to the source; a differing lock means the branch changed deps and must install
+# fresh. cp -c = macOS clonefile, cp --reflink = Linux; fall back to the NOTE.
+if [ -e "$MAIN/node_modules" ] && [ ! -d "$WT/node_modules" ]; then
+  if cmp -s "$MAIN/yarn.lock" "$WT/yarn.lock" 2>/dev/null; then
+    if cp -c -R "$MAIN/node_modules" "$WT/node_modules" 2>/dev/null \
+       || cp --reflink=auto -R "$MAIN/node_modules" "$WT/node_modules" 2>/dev/null; then
+      echo "clone node_modules (CoW, yarn.lock matched)"
+    else
+      echo "NOTE: node_modules missing — install it in the worktree (never symlink)"
+    fi
+  else
+    echo "NOTE: yarn.lock differs — install node_modules in the worktree (deps changed)"
+  fi
+fi
 echo "done: $WT"
