@@ -29,5 +29,5 @@ Produce a ready-to-ship PR draft the user can read before anything touches GitHu
 
 ## Finishing touches
 
-- Label the PR: every dnsimple-app PR carries `bug` or `enhancement`.
+- Label the PR: every PR carries `bug` or `enhancement`.
 - Assign it.

@@ -12,7 +12,7 @@ This skill's engine carries no repo-specific knowledge and does no guessing: **e
 
 ### Creating a per-repo config
 
-A per-repo config is two files named after the origin remote's repository name (`git remote get-url origin` basename, e.g. `dnsimple-app` for dnsimple/dnsimple-app):
+A per-repo config is two files named after the origin remote's repository name (`git remote get-url origin` basename, e.g. `app` for my/app):
 
 - `profiles/<repo>.json` — REQUIRED. The machine config: boot + login. `chmod 600` it.
 
