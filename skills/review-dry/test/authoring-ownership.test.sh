@@ -30,6 +30,10 @@ has "$SKILL" "that red is the deliverable"       "a genuine product failure is k
 has "$SKILL" "Confirm the QA plan with the user before running" "review-dry confirms the QA plan before running"
 has "$SKILL" "do not run it yet"                 "authoring does not run QA immediately"
 
+# --- QA is scaled to the diff, and a surfaceless change gets no browser run -
+has "$SKILL" "proportionality is a rule, not a preference" "QA is scaled to the change"
+has "$SKILL" "no observable surface"             "a surfaceless change is a sanctioned skip"
+
 # --- review-dry owns the complete-scenario authoring + frame review --------
 has "$SKILL" "author a COMPLETE"                 "review-dry authors the complete scenario"
 has "$SKILL" "no TODOs, no blanks, real selectors" "review-dry forbids TODO/blanks in the handoff"

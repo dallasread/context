@@ -1,6 +1,6 @@
 ---
 name: pr-dry
-description: Dry-run a pull request. Run the review-dry skill over the branch (four lenses + mandatory live QA), then draft the PR title and description from the repo's PR template — taking over its QA section with the review/qa evidence block plus a manual-verification walkthrough below the video (a 👓 QA section), and the deploy sections — for the user to review. Nothing is created, pushed, or uploaded until explicitly asked. Use when asked to prep or dry-run a PR.
+description: Dry-run a pull request. Run the review-dry skill over the branch (four lenses + live QA scaled to the change), then draft the PR title and description from the repo's PR template — taking over its QA section with the review/qa evidence block plus a manual-verification walkthrough below the video (a 👓 QA section), and the deploy sections — for the user to review. Nothing is created, pushed, or uploaded until explicitly asked. Use when asked to prep or dry-run a PR.
 ---
 
 # pr-dry
@@ -11,7 +11,7 @@ Produce a ready-to-ship PR draft the user can read before anything touches GitHu
 
 1. Use your memory — recall the relevant project memory (conventions, prior decisions, constraints) before drafting.
 2. Ensure there are no related uncommitted items.
-3. Run the **review-dry** skill over the branch — the four lenses plus its mandatory live QA. Fix or surface what it finds before drafting. Skip its comment draft (the PR description below is this skill's deliverable), but keep its QA evidence dir: the 👓 QA section renders from it.
+3. Run the **review-dry** skill over the branch — the four lenses plus its live QA, which it scales to the change (a diff with no observable surface gets no browser run). Fix or surface what it finds before drafting. Skip its comment draft (the PR description below is this skill's deliverable), but keep its QA evidence dir: the 👓 QA section renders from it.
 4. Draft the PR title and description using the repo's pull request template (`.github/pull_request_template.md`), completing every section — the review/qa block takes over the template's QA section (see below). Title carries no issue IDs — linkage goes in the body ("Fixes #1234" / "Belongs to #1234").
 5. Show the draft and stop. Do not create the PR, push, or upload anything unless explicitly asked.
 
