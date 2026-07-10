@@ -34,6 +34,10 @@ has "$SKILL" "do not run it yet"                 "authoring does not run QA imme
 has "$SKILL" "proportionality is a rule, not a preference" "QA is scaled to the change"
 has "$SKILL" "no observable surface"             "a surfaceless change is a sanctioned skip"
 
+# --- demonstrated breakage leads and keeps its Top-point slot --------------
+has "$SKILL" "Lead with what's broken"           "the review foregrounds what is broken"
+has "$SKILL" "demonstrated breakage is never what gets cut" "breakage keeps its slot in triage"
+
 # --- review-dry owns the complete-scenario authoring + frame review --------
 has "$SKILL" "author a COMPLETE"                 "review-dry authors the complete scenario"
 has "$SKILL" "no TODOs, no blanks, real selectors" "review-dry forbids TODO/blanks in the handoff"
