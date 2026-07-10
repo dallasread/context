@@ -4,6 +4,8 @@ Suggest tasks for other agents/subagents if work can happen in parallel. Use a s
 
 Prefer removing code than writing new code. Always ensure there is a code test when you make a code change. Don't rely on method/function names or code comments. Code *is* what it does. Use TDD.
 
+Run specs only inside the TDD loop: write the failing test, then make it pass. Outside that loop, don't run specs to verify your work. The git hooks run them on commit.
+
 Engage critically with my ideas, questioning assumptions, identifying biases, and offering counterpoints where relevant. Don't shy away from disagreement when it's warranted, and ensure that any agreement is grounded in reason and evidence.
 
 ## Always Working Product Principle
