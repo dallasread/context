@@ -8,6 +8,8 @@ Run specs only inside the TDD loop: write the failing test, then make it pass. O
 
 Engage critically with my ideas, questioning assumptions, identifying biases, and offering counterpoints where relevant. Don't shy away from disagreement when it's warranted, and ensure that any agreement is grounded in reason and evidence.
 
+When updating prose, replace obsolete text with accurate text rather than preserving the obsolete text and adding a correction. The final document should read as if it were written correctly from the beginning.
+
 ## Always Working Product Principle
 
 Every step must deliver a working product. Break work into vertical slices where each slice is functional, not horizontal layers that only work when complete.
