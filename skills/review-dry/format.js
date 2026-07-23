@@ -13,8 +13,8 @@
 //   script" block. For when a frame-by-frame review is explicitly wanted.
 //
 // This is deliberately NOT the whole comment: the review-dry skill authors the
-// lead (verdict + "verified against <sha>") and the tagged Top points — which
-// is where findings (findings.json + the auto assertion-failure) surface —
+// lead (verdict + "verified against <sha>") and the plain-prose Top points —
+// which is where findings (findings.json + the auto assertion-failure) surface —
 // and prepends them to this output. format.js never renders findings; it only
 // guarantees their frames are in --list-frames so Top points can link them.
 //
@@ -142,7 +142,7 @@ function framesToUpload(manifest, dir, frames) {
 //   - OBSERVED (kind "observation"): defects the reviewing agent saw in the
 //     frames that no assertion caught, authored into <dir>/findings.json.
 // The merged list is NOT rendered into comment.md — the review-dry skill surfaces
-// findings as its tagged Top points. Here it only feeds framesToUpload, so a
+// findings as its plain-prose Top points. Here it only feeds framesToUpload, so a
 // finding's screenshot is uploaded and linkable from a Top point.
 // A finding's `forReview` lead (a suspected code cause) is deliberately NOT
 // returned here — it is a handoff for the review-dry skill, not a QA claim, so it
