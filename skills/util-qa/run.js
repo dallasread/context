@@ -56,6 +56,7 @@ const CAPTION_CSS =
     '#cap{position:fixed;left:0;right:0;bottom:0;z-index:2147483647;padding:13px 20px;font:500 19px/1.4 -apple-system,sans-serif;color:#fff;pointer-events:none;opacity:.9;transition:opacity .2s ease,padding .2s ease}'
   + '#cap.cp{padding:18px 22px;font-weight:700;font-size:26px;opacity:1;box-shadow:inset 8px 0 0 #ffd24a}'
   + '#captext{vertical-align:middle}'
+  + '#capurl{display:block;margin-top:3px;font-size:11px;line-height:1.3;font-weight:400;opacity:.6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}'
   + '#badge{position:fixed;bottom:4px;right:16px;width:104px;height:104px;z-index:2147483647;pointer-events:none;filter:drop-shadow(0 2px 4px rgba(0,0,0,.35))}'
   + '#badge svg{width:100%;height:100%;display:block}';
 
@@ -159,7 +160,8 @@ async function showClick(page, x, y) {
 }
 
 async function setCaption(page, text, state = 'running', checkpoint = false, badges = {}) {
-  await page.evaluate(([text, bg, badge, checkpoint, css]) => {
+  const url = redact(page.url()); // read+redact here (sync, off the live Page) — a token in a query string must not land in the video's own pixels
+  await page.evaluate(([text, bg, badge, checkpoint, css, url]) => {
     // QA chrome — the caption bar and the corner badge — lives inside a CLOSED
     // shadow root, so it is completely invisible to the automation querying the
     // page under test. Playwright pierces OPEN shadow roots but cannot see
@@ -188,7 +190,7 @@ async function setCaption(page, text, state = 'running', checkpoint = false, bad
       shadow = host.attachShadow({ mode: 'closed' });
       host.__qaShadow = shadow;
       shadow.innerHTML =
-        `<style>${css}</style><div id="cap"><span id="captext"></span></div><div id="badge"></div>`;
+        `<style>${css}</style><div id="cap"><span id="captext"></span><span id="capurl"></span></div><div id="badge"></div>`;
     } else {
       shadow = host.__qaShadow;
     }
@@ -205,13 +207,14 @@ async function setCaption(page, text, state = 'running', checkpoint = false, bad
     cap.className = checkpoint ? 'cp' : '';
     cap.style.background = bg;
     shadow.getElementById('captext').textContent = text;
+    shadow.getElementById('capurl').textContent = url;
     // Swap the corner badge to this state's art. The profile supplies distinct
     // art per outcome (empty when it defines none for this state → hidden), so
     // the engine just drops in whatever SVG this state maps to.
     const badgeEl = shadow.getElementById('badge');
     badgeEl.innerHTML = badge;
     badgeEl.style.display = badge ? '' : 'none';
-  }, [text, CAPTION_COLORS[state], badges[state] || '', checkpoint, CAPTION_CSS]).catch(() => {});
+  }, [text, CAPTION_COLORS[state], badges[state] || '', checkpoint, CAPTION_CSS, url]).catch(() => {});
 }
 
 // Browser cookies ignore ports, so stores fall back from "host:port" to bare
