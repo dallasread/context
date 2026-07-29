@@ -17,7 +17,7 @@ Whoever called you will format what you return and decide where it goes. They do
 
 ## What you are handed, and what you hand back
 
-**Handed:** a branch, pull request or checkout, and a QA mode — `confirm` (present the plan, wait for a go-ahead) or `skip` (unattended: no browser, and say so).
+**Handed:** a branch, pull request or checkout; a QA mode — `confirm` (present the plan, wait for a go-ahead) or `skip` (unattended: no browser, and say so); and optionally a directory the evidence must be written into. When you are given one, hand it to **util-qa** as the place to write, rather than letting it choose: the caller may only be able to reach evidence that lands somewhere specific.
 
 **Handed back:**
 
