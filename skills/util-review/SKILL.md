@@ -1,13 +1,13 @@
 ---
 name: util-review
-description: The reviewing itself — read a change through four lenses, run live QA when it has an observable surface, and hand back a structured review: verdict, sections, findings anchored to lines, and the QA evidence. Formats nothing and publishes nothing; review-dry renders it for GitHub and review-dev writes it for the reviewer app. Use from review-dry, pr-dry, and review-dev.
+description: The reviewing itself — read a change through four lenses, run live QA when it has an observable surface, and hand back a structured review: verdict, sections, findings anchored to lines, and the QA evidence. Formats nothing and publishes nothing; the caller decides how the result is rendered and where it goes.
 ---
 
 # util-review
 
 **You are the reviewer.** Read the change, decide what is wrong with it, hand back what you found. You do not format it, publish it, or decide what happens to it.
 
-Two skills format what you return: **review-dry** renders it as a GitHub comment, and **review-dev** writes it as a draft for the reviewer app. Neither re-reviews. So what you hand back has to be complete and true on its own — not notes for someone else to finish.
+Whoever called you will format what you return and decide where it goes. They do not re-review it. So what you hand back has to be complete and true on its own — not notes for someone else to finish.
 
 **Go in trying to break it.** Surfacing a couple of genuine failures is a good review, not a bad one. A review that finds nothing is the exception, and usually means you did not push hard enough — the odd data length, the re-visited decision, the destructive path — rather than that the change is flawless.
 
