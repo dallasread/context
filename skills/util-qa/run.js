@@ -69,6 +69,14 @@ const CAPTION_CSS =
 // offbeat chop (the reggae and ska beds). `pick(idx,[v0..v3])` is a nested-if selecting
 // vN by floor(idx); `seg` is the chord index, `beat` the arpeggio step within a chord.
 const MUSIC_TRACKS = ['lounge', 'twilight', 'sunrise', 'reggae', 'ska'];
+
+// Curated "plain narrator" macOS `say` voices — excludes the novelty ones
+// (Zarvox, Bad News, Trinoids, Bells, ...) which read as silly rather than
+// narrated QA. `narrationVoice: 'random'` in the profile (or --voice random)
+// picks one of these at random EACH RUN — genuine randomness, unlike the
+// music bed's per-scenario-name hash: a repo asking for voice variety wants a
+// fresh pick every time, not the same voice pinned to a given scenario name.
+const VOICE_CHOICES = ['Samantha', 'Karen', 'Daniel', 'Moira', 'Tessa', 'Kathy'];
 function buildMusic(track) {
   const HZ = { F3: 174.61, G3: 196.0, A3: 220.0, B3: 246.94, C4: 261.63, D4: 293.66, E4: 329.63, F4: 349.23, G4: 392.0, A4: 440.0, B4: 493.88, C5: 523.25 };
   const TRACKS = {
@@ -280,6 +288,26 @@ function redact(text) {
   return SECRETS.reduce((s, secret) => s.split(secret).join('••••••'), String(text));
 }
 
+// Accessibility narration: macOS `say` (offline TTS, no external asset or
+// licensing — the same stance as the synthesized music beds) reads the
+// scenario's goal and each checkpoint's line aloud, muxed under the music bed,
+// so a viewer who can't watch the screen still gets the QA narrative. Detected
+// at runtime, never assumed — a host without `say` (Linux CI) just gets no
+// narration track; the run still passes and the manifest records `narrated:
+// false`. The WORDING is authored, not generated here: a scenario writes its
+// own narration text (`checkpoint(caption, assert, { narrate })`, `meta.intro`)
+// so an app's voice — "delightfully cheerful", "funny and long-winded",
+// whatever the profile's narrationStyle calls for — is baked into the saved
+// `.spec.js` once, at authoring time, keeping a model-free re-run exact.
+let sayChecked = null;
+function hasSay() {
+  if (sayChecked === null) {
+    try { execFileSync('say', ['-v', '?'], { stdio: 'ignore' }); sayChecked = true; }
+    catch { sayChecked = false; }
+  }
+  return sayChecked;
+}
+
 // Log in by running the repo's "login" macro (steps like any scenario's),
 // then persist the fresh session into the skill's cookie store.
 async function formLogin(page, base, host, creds) {
@@ -367,7 +395,9 @@ async function main() {
       base: { type: 'string' },
       repo: { type: 'string' },
       music: { type: 'string' },
+      voice: { type: 'string' },
       'no-auth': { type: 'boolean', default: false },
+      'no-narrate': { type: 'boolean', default: false },
     },
     allowPositionals: true,
     strict: true,
@@ -393,11 +423,35 @@ async function main() {
   const jsScenario = typeof mod === 'function' ? mod : (typeof mod.run === 'function' ? mod.run : null);
   if (!jsScenario) throw new Error('JS scenario must export an async function (or { run, meta }) — see SKILL.md');
   const meta = mod.meta || {};
-  const scenario = { name: meta.name || path.basename(positionals[0]), base: meta.base || null, holdMs: meta.hold, music: meta.music, viewport: meta.viewport };
+  const scenario = { name: meta.name || path.basename(positionals[0]), base: meta.base || null, holdMs: meta.hold, music: meta.music, viewport: meta.viewport, intro: meta.intro, narrate: meta.narrate };
   const base = values.base || scenario.base || 'http://localhost:3000';
   const cookieHost = scenario.cookieHost || new URL(base).host;
   const creds = values['no-auth'] ? null : repoConfig;
   const badges = loadBadges(repoConfig); // profile-owned corner art, keyed by state
+  // Narration is opt-out and silently skipped when `say` isn't on the host —
+  // never a run failure either way. Two independent repo-level defaults live
+  // in the profile (profiles/<repo>.js), each overridable per scenario:
+  //   - `narrate` (default true) — whether ANY narration happens for this repo
+  //   - `narrationIntro` (default true) — whether the opening line is spoken
+  // Precedence for each: --no-narrate (narration only) always wins; else the
+  // scenario's own `meta.narrate` / `meta.intro` (explicit true/false/string)
+  // wins; else the repo's default; else the engine default (both true). The
+  // VOICE is profile-owned too (like badge/variables): a repo's `narrationStyle`
+  // (free text — "delightfully cheerful", "funny and long-winded" — documented
+  // in profiles/<repo>.md for whoever authors scenario narration) can pick a
+  // `narrationVoice` (a macOS `say` voice name) to match; default is Samantha.
+  // `narrationVoice: 'random'` (or --voice random) instead picks a fresh voice
+  // from VOICE_CHOICES every run; --voice always overrides the profile.
+  const repoNarrateDefault = repoConfig?.narrate !== false;
+  const wantsNarration = !values['no-narrate'] && (scenario.narrate === undefined ? repoNarrateDefault : scenario.narrate !== false);
+  const narrateEnabled = wantsNarration && hasSay();
+  if (wantsNarration && !narrateEnabled) console.warn('  (no "say" binary found — narration skipped)');
+  let narrationVoice = values.voice || repoConfig?.narrationVoice || 'Samantha';
+  if (String(narrationVoice).toLowerCase() === 'random') {
+    narrationVoice = VOICE_CHOICES[Math.floor(Math.random() * VOICE_CHOICES.length)];
+  }
+  const repoIntroDefault = repoConfig?.narrationIntro !== false;
+  const introEnabled = scenario.intro === false ? false : (scenario.intro !== undefined ? true : repoIntroDefault);
   // Redaction backstop: every variable value is treated as sensitive (short
   // ones excepted — redacting "1" would mangle unrelated output).
   SECRETS = Object.values(repoConfig?.variables || {}).map(String).filter((v) => v.length >= 4);
@@ -455,6 +509,11 @@ async function main() {
   let firstContentAtSec = 0; // trims the blank lead-in before the first navigation rendered
   // Bind the page and this run's profile badges to every caption update.
   const caption = (text, state, cp = false) => setCaption(page, text, state, cp, badges);
+  // Narration lines queued in real time (ms since the recording started); the
+  // actual `say` synthesis happens once, after the run, in queued order — so a
+  // slow TTS call can never skew a later checkpoint's timing.
+  const narrationQueue = [];
+  const queueNarration = (text) => { if (narrateEnabled) narrationQueue.push({ text, atMs: Date.now() - videoStartedAt }); };
 
   { // ---- scenario harness ----------------------------------------------------
     // The author's module drives; these helpers fire the caption/frame/verdict
@@ -475,9 +534,15 @@ async function main() {
     // see* sugar) and THROWS on failure; a throw records the checkpoint red and
     // FAILs the run, exactly like a false `see` assertion. The human caption
     // lives in the closed shadow root, so it can never self-match the assertion.
-    const checkpoint = async (label, assert) => {
+    const checkpoint = async (label, assert, opts = {}) => {
       cpIndex += 1;
       const text = redact(String(label));
+      // `opts.narrate` lets the scenario author write the SPOKEN line
+      // separately from the on-screen caption — the mechanism for a
+      // profile's narrationStyle ("delightfully cheerful", "funny and
+      // long-winded") to actually show up in the audio. Omit it and the
+      // caption itself is read verbatim.
+      const narrateText = redact(String(opts.narrate ?? label));
       const record = { n: results.length + 1, action: 'checkpoint', checkpoint: true, caption: text };
       await cap(`⏳ ${cpIndex}  ${text}`, 'running', true);
       await dwell(CHECKPOINT_INTRO_MS);
@@ -489,6 +554,7 @@ async function main() {
         record.ok = false; record.error = error; failed = true;
         console.error(`  ${n} FAIL ${text}\n     ${error}`);
         await cap(`❌ ${cpIndex}  ${text}  FAIL`, 'fail', true);
+        queueNarration(`${narrateText}. Failed.`);
         await dwell(FAIL_HOLD_MS);
         await snapJs(record, 'checkpoint');
         results.push(record);
@@ -497,6 +563,7 @@ async function main() {
       record.ok = true;
       console.log(`  ${n} PASS ${text}`);
       await cap(`✅ ${cpIndex}  ${text}`, 'pass', true);
+      queueNarration(narrateText);
       await dwell(celebrateMs);
       await snapJs(record, 'checkpoint');
       results.push(record);
@@ -528,6 +595,13 @@ async function main() {
     const select = (css, value) => runStep(page, { action: 'select', selector: css, value }, base);
     const wait = (ms) => runStep(page, { action: 'waitMs', ms }, base); // clamped to the per-step cap
 
+    // The spoken opener: `meta.intro` lets the scenario write its own goal
+    // statement (matching the profile's narrationStyle); omitted, it falls
+    // back to a plain "Reviewing: <name>".
+    if (introEnabled) {
+      const introText = typeof scenario.intro === 'string' ? scenario.intro : `Reviewing: ${scenario.name}`;
+      queueNarration(redact(String(introText)));
+    }
     try {
       await jsScenario({ page, base, checkpoint, visit, see, seeElement, seeButton, click, clickText, fill, select, wait, vars });
     } catch (e) {
@@ -549,6 +623,26 @@ async function main() {
   await ctx.close(); // finalizes the recording
   await browser.close();
 
+  // Synthesize the queued narration lines now, in one batch, after the page is
+  // gone — a slow `say` call here can no longer skew any checkpoint's on-page
+  // timing (that was captured live, in queueNarration, as ms since the
+  // recording started). Each clip's mux offset subtracts firstContentAtSec so
+  // it lines up with the TRIMMED video timeline below.
+  const narrationDir = path.join(outDir, 'narration');
+  const narrationClips = [];
+  if (narrateEnabled && narrationQueue.length) {
+    fs.mkdirSync(narrationDir, { recursive: true });
+    narrationQueue.forEach((n, i) => {
+      const clipPath = path.join(narrationDir, `${i}.aiff`);
+      try {
+        execFileSync('say', ['-v', narrationVoice, '-o', clipPath, n.text]);
+        narrationClips.push({ text: n.text, path: clipPath, atSec: Math.max(0, n.atMs / 1000 - firstContentAtSec) });
+      } catch (e) {
+        console.warn(`  (narration synth failed for "${n.text}": ${e.message})`);
+      }
+    });
+  }
+
   let videoPath = null;
   if (video) {
     const webm = await video.path();
@@ -565,24 +659,43 @@ async function main() {
     // licensing) — see buildMusic for the chosen track's progression, tempo, and
     // feel — then mixed in and cut to the video length with -shortest.
     const { src: music, lowpass } = buildMusic(musicTrack);
-    const filter = [
-      `[0:v]trim=start=${firstContentAtSec.toFixed(2)},setpts=PTS-STARTPTS,fps=30[v]`,
-      `[1:a]lowpass=f=${lowpass},afade=t=in:st=0:d=1.5[a]`
-    ].join(';');
-    execFileSync('ffmpeg', [
-      '-y', '-loglevel', 'error',
-      '-i', webm,
-      '-f', 'lavfi', '-i', music,
-      '-filter_complex', filter,
+    const videoFilter = `[0:v]trim=start=${firstContentAtSec.toFixed(2)},setpts=PTS-STARTPTS,fps=30[v]`;
+    const ffArgs = ['-y', '-loglevel', 'error', '-i', webm, '-f', 'lavfi', '-i', music];
+    let audioFilter;
+    if (narrationClips.length) {
+      // Narration rides over a ducked music bed: each clip is `adelay`ed to its
+      // checkpoint's moment, and the mix is `normalize=0` so ffmpeg's amix
+      // doesn't divide every input's volume down by the input count — the
+      // spoken line stays clear over the quieter pad.
+      const parts = [`[1:a]lowpass=f=${lowpass},afade=t=in:st=0:d=1.5,volume=0.45[bgm]`];
+      const mixLabels = ['[bgm]'];
+      narrationClips.forEach((clip, i) => {
+        ffArgs.push('-i', clip.path);
+        const inputIdx = i + 2;
+        const delayMs = Math.round(clip.atSec * 1000);
+        const label = `[n${i}]`;
+        parts.push(`[${inputIdx}:a]adelay=${delayMs}|${delayMs},volume=1.6${label}`);
+        mixLabels.push(label);
+      });
+      parts.push(`${mixLabels.join('')}amix=inputs=${mixLabels.length}:normalize=0[a]`);
+      audioFilter = parts.join(';');
+    } else {
+      audioFilter = `[1:a]lowpass=f=${lowpass},afade=t=in:st=0:d=1.5[a]`;
+    }
+    ffArgs.push(
+      '-filter_complex', `${videoFilter};${audioFilter}`,
       '-map', '[v]', '-map', '[a]', '-shortest',
       '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '96k',
       videoPath
-    ]);
+    );
+    execFileSync('ffmpeg', ffArgs);
     fs.rmSync(webm);
   }
+  fs.rmSync(narrationDir, { recursive: true, force: true }); // baked into qa.mp4's audio; the text survives in steps.json below
 
   const verdict = failed ? 'FAIL' : 'PASS';
-  const manifest = { name: scenario.name, verdict, base, music: musicTrack, viewport, steps: results, video: videoPath };
+  const narration = narrationClips.map(({ text, atSec }) => ({ text, atSec: Number(atSec.toFixed(2)) }));
+  const manifest = { name: scenario.name, verdict, base, music: musicTrack, voice: narrationVoice, narrated: narration.length > 0, narration, viewport, steps: results, video: videoPath };
   fs.writeFileSync(path.join(outDir, 'steps.json'), redact(JSON.stringify(manifest, null, 2)));
   console.log(`\n${verdict} ${scenario.name}`);
   // The checkpoints are the QA narrative — the human-meaningful things the run
