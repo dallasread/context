@@ -25,6 +25,8 @@ skills/*
 !skills/util-qa/**
 !skills/review-dry
 !skills/review-dry/**
+!skills/util-review
+!skills/util-review/**
 !skills/util-gh-upload
 !skills/util-gh-upload/**
 !skills/pr-dry
