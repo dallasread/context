@@ -5,13 +5,13 @@ description: Run a scripted browser scenario against the booted app and record a
 
 # util-qa
 
-Scripted browser QA with video evidence. **You are a runner, not an author.** You are handed a **complete** scenario (a `.spec.js` module), you boot the app, run it **verbatim**, and report the results — the verdict, which checkpoints passed or failed, and the evidence paths. Deciding *what* to test (the flows, the checkpoints, the regression cases), authoring the selectors, and reviewing the frames for bugs are the **caller's** job — the review-dry skill. None of that is yours. (How a scenario is written lives in [REFERENCE.md](REFERENCE.md); you do not need it to run one you were handed.)
+Scripted browser QA with video evidence. **You are a runner, not an author.** You are handed a **complete** scenario (a `.spec.js` module), you boot the app, run it **verbatim**, and report the results — the verdict, which checkpoints passed or failed, and the evidence paths. Deciding *what* to test (the flows, the checkpoints, the regression cases), authoring the selectors, and reviewing the frames for bugs are the **caller's** job — the review-dry skill. None of that is yours.
 
 **Run only what you were handed. Change nothing.** Never add, drop, reorder, or reinterpret a step or checkpoint; never insert a `wait`, re-seed or re-clean data, or re-run with tweaks on your own initiative. If the scenario will not run cleanly — a selector misses, a step needs a wait, the timing is off — that is the **author's** to fix, not yours: report the failing step and its frame, and stop. Do not "repair" the script, and never paper over a real failure to manufacture a green run. A faithful red run is the correct output; a doctored green one is a lie.
 
 ## Run it
 
-1. **Prepare the app**: provision the worktree and build assets (fresh-worktree setup is in [REFERENCE.md](REFERENCE.md)). Do NOT boot the server yourself — qa.sh owns the server lifecycle. The caller hands you a complete scenario file; you do not write it, extend it, derive it, or fill anything in. If no runnable scenario was provided, that is a missing input — say so and stop, don't invent one.
+1. **Prepare the app**: provision the code and build assets. Do NOT boot the server yourself. The caller hands you a complete scenario file; you do not write it, extend it, derive it, or fill anything in. If no runnable scenario was provided, that is a missing input — say so and stop, don't invent one.
 
 2. **Run the scenario verbatim, from the app directory:**
 

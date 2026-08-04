@@ -240,6 +240,17 @@ function loadCookies(host) {
 // Repo config is per-repo (profiles/<repo>.json) so two apps on localhost
 // never collide; the host-keyed credentials.json remains as a fallback for
 // standalone --base runs without --repo.
+// Base-URL precedence: an explicit --base always wins (qa.sh computes it from
+// the profile's baseHost + the boot port), then a scenario-pinned base, then a
+// standalone default whose host comes from the profile's baseHost when the
+// repo declares one (an app that doesn't route on plain localhost), else
+// localhost. Port 3000 is the historical standalone default.
+function resolveBase(cliBase, scenarioBase, repoConfig) {
+  if (cliBase) return cliBase;
+  if (scenarioBase) return scenarioBase;
+  return `http://${(repoConfig && repoConfig.baseHost) || 'localhost'}:3000`;
+}
+
 function loadRepoConfig(repo, host) {
   if (repo) {
     // A bare repo name resolves to profiles/<name>.js (a JS module exporting
@@ -424,7 +435,7 @@ async function main() {
   if (!jsScenario) throw new Error('JS scenario must export an async function (or { run, meta }) — see SKILL.md');
   const meta = mod.meta || {};
   const scenario = { name: meta.name || path.basename(positionals[0]), base: meta.base || null, holdMs: meta.hold, music: meta.music, viewport: meta.viewport, intro: meta.intro, narrate: meta.narrate };
-  const base = values.base || scenario.base || 'http://localhost:3000';
+  const base = resolveBase(values.base, scenario.base, repoConfig);
   const cookieHost = scenario.cookieHost || new URL(base).host;
   const creds = values['no-auth'] ? null : repoConfig;
   const badges = loadBadges(repoConfig); // profile-owned corner art, keyed by state
@@ -715,4 +726,4 @@ async function main() {
 if (require.main === module) {
   main().catch(e => { console.error(e); process.exit(1); });
 }
-module.exports = { loadBadges, loadRepoConfig, formLogin, CAPTION_CSS, setCaption };
+module.exports = { loadBadges, loadRepoConfig, resolveBase, formLogin, CAPTION_CSS, setCaption };

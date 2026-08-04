@@ -102,8 +102,12 @@ REPO=$(git remote get-url origin 2>/dev/null | sed -E 's#\.git$##; s#.*[:/]##')
 # require() reads either; `serve` is a plain string on both.
 CONFIG="$SKILL_DIR/profiles/$REPO.js"
 [ -f "$CONFIG" ] || CONFIG="$SKILL_DIR/profiles/$REPO.json"
-SERVER=""
+SERVER=""; BASEHOST="localhost"
 [ -f "$CONFIG" ] && SERVER=$(node -e "console.log(require('$CONFIG').serve || '')")
+# baseHost: the host the app routes on when it isn't plain localhost (e.g. a
+# subapp split serving the app only on app.<name>.localhost). Any *.localhost
+# name resolves to loopback without /etc/hosts. run.js gets it via --base.
+[ -f "$CONFIG" ] && BASEHOST=$(node -e "console.log(require('$CONFIG').baseHost || 'localhost')")
 if [ -n "$OVERRIDE" ]; then
   SERVER=$OVERRIDE
 elif [ -z "$SERVER" ]; then
@@ -137,7 +141,7 @@ mkdir -p "$OUT"
 # --- boot (unless reusing a warm server) ----------------------------------
 if [ -z "$REUSE" ]; then
   PORT=$(node -e 'const s = require("net").createServer(); s.listen(0, "127.0.0.1", () => { console.log(s.address().port); s.close(); });')
-  BASE="http://localhost:$PORT"
+  BASE="http://$BASEHOST:$PORT"
 
   echo "boot: $SERVER"
   PORT=$PORT sh -c "$SERVER" > "$OUT/server.log" 2>&1 &
