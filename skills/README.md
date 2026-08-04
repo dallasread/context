@@ -27,7 +27,7 @@ runner, a single formatter, and so on.
 | Skill | Hand it | You get back |
 |---|---|---|
 | **util-review** | a branch to review, and whether QA may run | the review itself: verdict, sections, findings anchored to lines, and the QA evidence. Owns the lenses, the scenario authoring and the findings. It formats nothing and publishes nothing. |
-| **review-dev** | a review result and a drafts directory | that review written as a JSON draft the reviewer app reads. The other formatter, and the only place the draft file's shape lives. |
+| **dev-review** | a review result and a drafts directory | that review written as a JSON draft the reviewer app reads. The other formatter, and the only place the draft file's shape lives. |
 | **util-review-queue** | nothing, or a pull request to check out | which pull requests are waiting on you and have no draft yet, and one of them checked out in a throwaway worktree. Never clones and never touches a working tree. |
 | **util-qa** | a complete browser scenario to run | an evidence directory (pass/fail verdict, video, per-step frames). A pure **runner**: it never authors, repairs, re-seeds, hunts for bugs, or posts. It needs a one-time per-repo setup before it can boot a given app. |
 | **util-gh-upload** | evidence files and a target PR | those files published to GitHub as hosted URLs. The **only** uploader; it confirms with you immediately before every publish. |
@@ -49,7 +49,7 @@ another:
                                        │
                     ┌──────────────────┴──────────────────┐
                     ▼                                     ▼
-               review-dry                            review-dev
+               review-dry                            dev-review
          (formats for GitHub)                (formats for the reviewer app)
                     │                                     │
         shows you the draft; pr-dry               writes a JSON draft file

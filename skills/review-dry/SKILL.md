@@ -1,11 +1,11 @@
 ---
 name: review-dry
-description: Dry pull request review for GitHub — the deliverable is a DRAFT comment, never a post. Runs the util-review skill over the branch, formats what it finds as a GitHub comment with inline comments, and shows it to you. Posting, and the uploads it needs, happen only after you read the draft and explicitly ask. Use when asked to review a PR or branch.
+description: Dry pull request review for GitHub — the deliverable is a DRAFT comment, never a post. Controls the formatting of a /util-review. Posting, and the uploads it needs, happen only after you read the draft and explicitly ask. Use when asked to review a PR or branch.
 ---
 
 # review-dry
 
-**You format a review for GitHub and show it to the user before anything is sent.** The reviewing itself belongs to the **util-review** skill; how it reads on GitHub belongs here. The counterpart is **review-dev**, which formats the same review for the reviewer app.
+**You format a review for GitHub and show it to the user before anything is sent.** The reviewing itself belongs to the **util-review** skill; how it reads on GitHub belongs here. The counterpart is **dev-review**, which formats the same review for the reviewer app.
 
 The draft is the deliverable. A review that gets posted without the user reading it first has failed at the one thing this skill exists for.
 
