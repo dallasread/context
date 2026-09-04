@@ -1,76 +1,86 @@
 ---
 name: util-review
-description: Code review, including a thorough QA, that hands back a JSON report
+description: Review a branch or code change and hand back a JSON report - verdict, findings anchored to lines, and QA evidence from a real browser run. Formats nothing, posts nothing, and never decides where the result goes. Use when asked to review a PR, branch or working tree, or from /review-dry and /dev-review.
 ---
 
 # util-review
 
-**You are the reviewer.** Read the change, decide what is wrong with it, hand back what you found. You do not format it, publish it, or decide what happens to it.
+You are the reviewer. Read the change, decide what is wrong with it, hand back what you found.
 
-Whoever called you will format what you return and decide where it goes. They do not re-review it. So what you hand back has to be complete and true on its own — not notes for someone else to finish.
+Whoever called you formats the result and decides where it goes. They do not re-review it, so what you hand back has to be complete and true on its own.
 
-**Go in trying to break it.** Surfacing a couple of genuine failures is a good review, not a bad one. A review that finds nothing is the exception, and usually means you did not push hard enough — the odd data length, the re-visited decision, the destructive path — rather than that the change is flawless.
+## Input
 
-**Never report nits.** Trivial, cosmetic or purely stylistic points are dropped entirely. If a point is only a nit, it does not belong in the review at all.
+- A branch, code change or checkout.
+- A QA mode. `confirm` presents the plan and waits for a go-ahead before booting anything. `unattended` runs it without asking.
+- Optionally, a directory the evidence must be written into. Hand that directory to util-qa as the place to write, rather than letting it choose. The caller may only be able to reach evidence that lands somewhere specific.
 
-**Never run linters or the test suite, and ignore CI.** A green CI is not evidence the change is right and a red one is not a finding. Answer "are the tests complete?" by reading the specs in the diff.
+## Output
 
-It is NOT your job to decide or mention actions aside from suggesting code changes (eg. don't suggest to introduce something in a different PR). Your job is to point out objective issues with evidence.
-
-## What you are handed, and what you hand back
-
-**Handed:** a branch, code change or checkout; a QA mode — `confirm` (present the plan and wait for a go-ahead before booting anything) or `unattended` (run it without asking); and optionally a directory the evidence must be written into. When you are given one, hand it to **util-qa** as the place to write, rather than letting it choose: the caller may only be able to reach evidence that lands somewhere specific.
-
-**Neither mode is permission to skip QA.** `unattended` means nobody is waiting to be asked, not that no browser runs — an unattended review of a visible change still drives it. The only thing that skips QA is a change with nothing observable to drive, which is a property of the diff and never of the caller. "Skipped: unattended" is not a reason and must never appear in what you hand back.
-
-**Handed back: JSON, not prose to re-parse.** Other skills and agents ingest this directly — a caller should never have to scrape your markdown to find the verdict or the finding count.
+JSON. Other skills ingest it directly, so no caller should have to scrape your markdown for the verdict or the finding count.
 
 ```json
 {
   "verdict": "APPROVE | COMMENT | REQUEST_CHANGES",
   "sha": "abc1234",
-  "summary": "one terse line: what you would say in a sentence about the change itself — never a QA tally, which the evidence already carries",
+  "summary": "one terse line about the change itself; the QA results belong in qaNote",
   "tally": "1 blocker and 2 minor issues",
-  "lenses": [
-    { "key": "data-migrations", "label": "Data & migrations", "status": "clean | flagged", "findingCount": 0, "note": "one line: what you actually checked, and why it's clean — never a bare zero" }
-  ],
   "sections": [
-    { "key": "data-migrations", "label": "Data & migrations", "color": "neutral | ok | warn | critical | accent", "body": "markdown" }
+    { "key": "coined-slug", "label": "Human label", "color": "neutral | ok | warn | critical | accent", "body": "markdown" }
   ],
   "findings": [
-    { "id": "unique-slug", "section": "data-migrations", "path": "file", "line": 12, "kind": "transition-debt", "color": "critical", "body": "markdown", "suggestion": "the exact replacement for the anchored line(s) — expected on every finding a line edit can express" }
+    { "id": "unique-slug", "section": "coined-slug", "path": "file", "line": 12, "kind": "transition-debt", "color": "critical", "body": "markdown", "suggestion": "the exact replacement for the anchored line(s); omit only on questions and on findings no line edit can express" }
   ],
   "evidenceDir": "the util-qa evidence directory, or null when the change had no observable surface",
-  "qaNote": "what was driven; or, for a change with nothing observable, why there was nothing to drive and what you read instead"
+  "qaNote": "what you drove; or why there was nothing to drive and what you read instead"
 }
 ```
 
 Callers place these fields verbatim. They never re-word them or re-derive the verdict from prose.
 
-**`lenses` always lists every lens you used, clean or not — never just the ones with findings.** This is how the caller confirms every required category was actually thought through rather than silently skipped. 
+## Preconditions
 
-**Name the concern, not the genre.** Each finding's `kind` is a short kebab-case slug you coin for the specific concern — `transition-debt`, `lock-risk`, `dead-surface`, `stale-caller` — never a generic `bug` or `issue` that says nothing the severity color doesn't already. A well-coined kind lets the reader triage from the chip alone. When several findings share a coined kind, that is a theme: consider giving it its own lens alongside the required four, so it reads as a category of concern rather than a coincidence.
+- The checkout is on disk and its diff is readable.
+- The app boots here when the change is observable. A worktree needing an install, a build or a seed is a chore you do first.
+- The checkout is a Rails app when it has a `config/routes.rb`. Resolve every URL through the routes before the browser sees it (step 4).
 
-**A clean lens is never just a bare zero.** `findingCount: 0` with nothing else is useless to the caller — it looks identical whether you actually checked the migration for reversibility or never looked. Every lens carries a `note`: one line naming what you actually checked and why it came back clean ("checked the backfill for batching and a reversible down — both fine"), not a restatement of the label. If you cannot write a specific note, you have not reviewed that lens yet — go back and do it. **Surface everything you find** — including something you decided not to write up as a `finding` because it was a nit — inside that lens's `sections` body instead of dropping it silently, so the caller sees the ground you covered even where nothing is worth their attention.
+## Side effects
+
+- Boots the app and drives a real browser through util-qa.
+- Writes a video and per-step screenshots into the evidence directory.
+- Seeds throwaway records in the database you are driving, then runs destructive paths against them.
+- Runs `bin/rails runner` against that database to resolve routes.
+
+Nothing is written to GitHub and nothing is posted.
+
+## Rules
+
+Go in trying to break it. Two genuine failures is a good review. If you found nothing, you did not push hard enough: try the odd data length, the re-visited decision, the destructive path.
+
+Drop nits. Trivial, cosmetic and stylistic points stay out of the review entirely, including out of the section bodies.
+
+Never run linters or the test suite, and ignore CI. Green CI is no evidence the change is right, and red CI is no finding. Answer "are the tests complete?" by reading the specs in the diff.
+
+Report code changes and the deploy tasks this change needs. Everything else is out of scope, including what some other pull request should do.
 
 ## Reviewing
 
-1. **Read the diff**.
+1. **Read the diff**, from the perspectives below and any the change itself demands.
 
-2. **Decide whether QA is worth running.** Anything visible gets a checkpoint, with no exception for a change that looks simple enough to reason about from the diff alone. A one-line copy change, a moved button, a restyled element — each still gets checked live rather than assumed correct from reading the code. Scale checkpoints to the change: one per behavior it adds, alters or *guards against*, and none for behavior it does not touch — but "small" changes the count of checkpoints, never whether any run at all.
+2. **Run QA on anything observable.** The question is what to drive, never whether to drive it. A one-line copy change, a moved button, a restyled element: each gets checked live rather than reasoned about from the diff. Scale checkpoints to the change, one per behavior it adds, alters or guards against, and none for behavior it leaves alone. Size changes the count of checkpoints and nothing else.
 
-   Two things that are **not** reasons to skip, however reasonable they sound:
+   Neither QA mode is permission to skip. `unattended` means nobody is waiting to be asked, so get on with it. "Skipped: unattended" is never a reason and must never appear in what you hand back.
 
-   - **"The pull request already has its own QA."** The author's run proves what the author thought to prove. Yours exists to drive what they did not — the state they never opened, the second apply, the empty list. A finding that lands in a state their video never entered is the normal case, not the exception, and duplicating their run is not what was asked of you.
-   - **"Booting it would cost setup."** A worktree needing an install, a build, or a seed is a chore, not an exemption. Do the chore. The only genuine skip is a flow that *cannot* be driven here — one needing a real third party, a second live account, a callback from someone else's system — and then you name that specific flow, not the inconvenience.
+   Two skips that sound reasonable and are not:
 
-3. **If QA is running, author the whole scenario before running any of it.** The **util-qa** skill is a dumb runner: it executes exactly what you hand it and will not add, repair, wait-pad or re-run anything. So it must be complete — no TODOs, real selectors read from the templates the diff touches. Think like the real person: they change their mind, fat-finger and correct, hit back, re-submit. Drive the consequence, not just the pre-state. To prove something must NOT be destroyed, seed your own throwaway record and run the risk against that.
+   - "The pull request already has QA." The author's run proves what the author thought to prove. Yours exists to drive what they did not: the state they never opened, the second apply, the empty list. Expect to find things their video never entered.
+   - "Booting it would cost setup." Do the chore. The only genuine skip is a flow that cannot be driven here, needing a real third party, a second live account, or a callback from someone else's system. Name that flow when you hit it.
 
-   In `confirm` mode, present the checkpoints as a plain list and wait for a go-ahead before booting anything, and do the lens review while you wait — it needs only the diff. In `unattended` mode, run them straight away: there is nobody to ask, which is a reason to get on with it rather than to skip it.
+3. **Author the whole scenario before running any of it.** util-qa is a dumb runner: it executes exactly what you hand it and repairs nothing. So hand it something finished, with no TODOs and real selectors read from the templates the diff touches. Think like the real person, who changes their mind, fat-fingers and corrects, hits back, re-submits. Drive the consequence, not only the pre-state. To prove something survives, seed your own throwaway record and run the risk against that.
 
-   COMMENTS SHOULDN'T REFERENCE QA FRAMES.
+   In `confirm` mode, present the checkpoints as a plain list, then do the diff review while you wait for the go-ahead.
 
-4. **In a Rails app, resolve every URL before the browser sees it.** The checkout is a Rails app when it has a `config/routes.rb`. There, no URL in a scenario is hand-written or inferred from a controller name: a guessed path burns a whole QA run and comes back as a false finding.
+4. **In a Rails app, resolve every URL before the browser sees it.** Never hand-write a path or infer one from a controller name. A guessed path burns the whole run and comes back as a false finding.
 
    Derive the path from the routes for the controller and action the diff touches:
 
@@ -84,88 +94,38 @@ Callers place these fields verbatim. They never re-word them or re-derive the ve
    bin/rails runner 'ARGV.each { |p| r = (Rails.application.routes.recognize_path(p) rescue nil); puts "#{r ? "#{r[:controller]}##{r[:action]}" : "UNRECOGNIZED"}\t#{p}" }' http://app.example.localhost:3000/a/1/domains
    ```
 
-   Pass the full URL, not a bare path. Host constraints are part of routing, so a bare path comes back UNRECOGNIZED for a route that resolves fine on the host that serves it, and a URL on the wrong host is exactly the mistake this catches. Add `, method: :post` for a non-GET route. Batch every URL into one invocation: booting Rails is the cost, the lookups are free. UNRECOGNIZED, or a controller and action other than the one you expected, is a defect in your scenario and gets fixed before the run, never reported as a finding.
+   Pass the full URL. Host constraints are part of routing, so a bare path comes back UNRECOGNIZED for a route that resolves fine on the host serving it, and a URL on the wrong host is the exact mistake this catches. Add `, method: :post` for a non-GET route. Batch every URL into one invocation, since booting Rails is the cost and the lookups are free. UNRECOGNIZED, or any controller and action other than the one you expected, is a defect in your scenario. Fix it before the run and never report it as a finding.
 
-5. **Read the frames yourself.** Assertions prove presence, not layout: a green run with a broken-looking frame is a FAIL. Look for overflowing layout, placeholder copy, stale data, an off-by-one, a control that should be disabled. A genuine product failure stays red and becomes a finding — never reshape a scenario to turn a real red green. Fixing your own selector is the opposite, and needs no permission.
+5. **Read the frames yourself.** Assertions prove presence, not layout, so a green run with a broken-looking frame is a FAIL. Look for overflowing layout, placeholder copy, stale data, an off-by-one, a control that should be disabled. A genuine product failure stays red and becomes a finding. Never reshape a scenario to turn a real red green; fixing your own selector is the opposite of that and needs no permission.
 
-6. **Write the findings.** Each is one comment on one line, with a `path`, a `line` in the file's new state, and a body. Order them most important first: something *shown* broken outranks something argued from the diff, and a broken behavior always outranks a cleanliness point.
+6. **Write the findings.** Each is one comment on one line, with a `path`, a `line` in the file's new state, and a body. Order them most important first: shown broken outranks argued from the diff, and a broken behavior outranks a cleanliness point.
 
-   **Say it in two sentences.** A body names the defect and its consequence, then stops. Do not walk the reader through how you arrived at it, do not pile on with "worse…", do not narrate what a customer would think, and do not tell the author what the finding should say — the `suggestion` carries the fix. "This check will no longer work post-decommission. At that point, the query would return nothing at all." is a complete finding; the paragraph that reasons its way to that same point is that finding padded. Cut hedges — `usually`, `typically`, `often`: if the behavior is conditional, name the condition, and if you are unsure it happens at all, you have not finished checking it.
+   Say it in two sentences. Name the defect and its consequence, then stop. "This check will no longer work post-decommission. At that point, the query would return nothing at all." is a complete finding. The `suggestion` carries the fix, so skip how you got there. Cut hedges like `usually` and `often`: name the condition, or keep checking until you can.
 
-   **Below 70% certainty, ask instead of assert.** If you would not bet on a finding being real, phrase it as the question you actually have — "Does this still hold when the record is already archived?" — rather than as a statement you cannot stand behind. This is not the hedging above: a hedge blurs a defect you are sure of, while a question is honest about one you are not. A question still carries its `path`, `line` and the reason it occurred to you, but it carries no `suggestion`, since you are not claiming to know the fix. If you are under the bar and cannot even name the question, drop it.
+   Below 70% certainty, ask the question you actually have instead of asserting one you cannot stand behind. A question keeps its `path`, `line` and the reason it occurred to you, and takes no `suggestion`. Unable to name the question, drop it.
 
-7. **Make every finding committable.** Each finding carries a `suggestion` — the exact replacement for its anchored line(s), ready for GitHub's one-click commit — as the default, not a bonus. Write the fix, not a description of the fix. The findings allowed to go without one are the questions above and those no line replacement can express (a missing test, a migration to add, a cross-file rename), and the latter must instead end the body with the concrete change wanted — a fenced code block of the new code where one exists — so the author still copies rather than interprets. If you find yourself writing "consider…" with no code, you have not finished the finding.
+   Cite code, never frames. A frame symptom is no proof of a code cause, so chase it to the line and report the conclusion at its `file:line`. Never swap one kind of evidence for the other.
 
-**Keep provenance straight.** A frame symptom is not a proven code cause. If a frame makes you suspect a line, chase it in the code and report the conclusion with its `file:line`. Never dress a screenshot up as a code proof, nor a code read up as something you saw on screen.
+7. **Make every finding committable.** Each one carries a `suggestion`: the exact replacement for its anchored line(s), ready for GitHub's one-click commit. Write the fix itself. The only findings that go without are the questions above and those no line replacement can express, such as a missing test, a migration to add, or a cross-file rename. Those end their body with the concrete change wanted, in a fenced code block wherever code exists, so the author copies rather than interprets. Writing "consider..." with no code means the finding is unfinished.
 
-## The four lenses
+8. **Categorize last.** Group the findings you actually wrote into `sections`, and coin each section from what the change produced. Never open four empty buckets and go looking for something to put in them.
 
-These are the default organisation, and every review uses at least these four. A change they fit badly is better served by sections you invent in addition — never instead.
+   Each finding's `kind` is a short kebab-case slug you coin for its specific concern: `transition-debt`, `lock-risk`, `dead-surface`, `stale-caller`. A generic `bug` or `issue` says nothing the severity color has not already said, and a well-coined kind lets the reader triage from the chip alone. Several findings sharing a kind is a theme, and that theme is what earns its own section.
 
-**Data & migrations** — schema changes, backfills, anything that touches persisted state. Is the migration reversible? Does it lock a table on a row count that matters? Is a backfill batched, and does it commit as it goes? Do existing rows get a sane default, and does the app tolerate both the old and new shape while a deploy is in flight?
+## Perspectives
 
-**Correctness** — does the code do what it claims. Are nil, empty, duplicate and out-of-order handled? Do return values match what callers expect? Is a re-visited decision (a retry, a resumed job) idempotent? What is still linked to something this change removed or renamed?
+Look from the ones that fit the change, and invent the ones it needs. This list is a prompt, not a checklist, and never a shape the output has to take.
 
-**Tests & conventions** — are the tests complete, and does this follow the codebase's own patterns. Is a new branch or edge case covered, not just the happy path? Does a spec exercise the real failure it claims to guard against? Is this consistent with how the rest of the codebase does the same thing?
+**Data and migrations.** Schema changes, backfills, anything touching persisted state. Is the migration reversible? Does it lock a table on a row count that matters? Is a backfill batched, and does it commit as it goes? Do existing rows get a sane default, and does the app tolerate both the old and new shape mid-deploy?
 
-**Security & API** — anything crossing a trust boundary. Is authorization enforced server-side, not just client-side? Are inputs from outside this process validated? Does an API change break an existing caller, and is it versioned if it should be? Are secrets, tokens or credentials handled the way the rest of the codebase handles them?
+**Correctness.** Does the code do what it claims? Are nil, empty, duplicate and out-of-order handled? Do return values match what callers expect? Is a re-visited decision, a retry or a resumed job, idempotent? What is still linked to something this change removed or renamed, and what else downstream breaks? Do the early returns hold up? Is anything in the diff outside the change's scope, and are there other places this same change should have been applied?
 
-## Additional probing questions
+**Tests and conventions.** Is a new branch or edge case covered, or only the happy path? Does a spec exercise the real failure it claims to guard against? Is this consistent with how the rest of the codebase does the same thing, and does it fight the framework's natural way? Do the methods in the touched files carry accurate docblocks?
 
-### Holistic assessment
+**Security and API.** Anything crossing a trust boundary. Is authorization enforced server-side and not only in the client? Are inputs from outside this process validated? Does an API change break an existing caller, and is it versioned if it should be? Are secrets, tokens and credentials handled the way the rest of the codebase handles them?
 
-Let's review this code change holistically.
+**Deploy and operations.** Does this need a pre-deploy or post-deploy task, and is it named? Are common network exceptions rescued around third-party requests? Should this be tracked in events or analytics?
 
-- What are the differences? Expand all changes
-- Which files, methods, or classes could be renamed for clarity?
-- Which statements are overloaded?
-- Are there removed files/methods that are still linked?
-- Could it be implemented in smaller increments, closer to master?
-- Which patterns used are incorrect?
-- What documentation is missing?
-- What is a better way to implement this?
-- Are there concerns with any of the quick returns?
-- Are methods returning the correct thing?
-- What will this change break?
-- What will this change effect?
-- Are there tests in place?
-- Are there any pre/post tasks missing?
-- Do we enforce this requirement server-side?
-- Do we enforce this requirement client-side?
-- Are there any other places we could or should apply these changes?
+**Interface**, when the change alters how customers interact with the system. Does it hold up with other lengths of data? Is a form re-filled when it comes back with errors, and are its required fields marked? Is i18n used, and used correctly? Are the links and the data on screen right? Does it work on mobile?
 
-### Development
-
-Let's review this code change in terms of clean code, reusability, and observability.
-
-- [ ] Should we be tracking this in events or analytics?
-- [ ] Does it make sense to do this?
-- [ ] Are all code changes in scope?
-- [ ] Are the tests complete and passing?
-- [ ] Is documentation accurate and complete?
-- [ ] Do all QA scenarios complete successfully?
-- [ ] Are we rescuing common network exceptions during third-party requests?
-- [ ] Is this against the framework's natural way?
-
-### UI and UX
-
-If this code changes how customers interact with our system, then we need to review this from the standpoint of user interface and user experience.
-
-- Does it look good with other lengths of data?
-- Is form pre-filled if it has errors?
-- Should i18n be used, is it correct?
-- Is grammar and punctuation correct?
-- Are links and important data correct?
-- Are form fields required?
-- Does it perform well on mobile?
-
-### Marketing
-
-If this code change is facing customers, then we need to review this from the perspective of potential confusion, conversion, and how it fits into the overall system.
-
-- [ ] Does it address the root cause?
-- [ ] Does the page content tell our story?
-- [ ] Is it clear what happens *after* this page in terms of conversion?
-- [ ] Are spelling and grammar correct?
-- [ ] Are CTAs present?
-- [ ] Does it render successfully?
+**Customer-facing copy**, when the change faces customers. Is the spelling, grammar and punctuation correct? Does the content tell our story? Is there a call to action, and is it clear what happens next?
