@@ -70,11 +70,31 @@ Callers place these fields verbatim. They never re-word them or re-derive the ve
 
    COMMENTS SHOULDN'T REFERENCE QA FRAMES.
 
-4. **Read the frames yourself.** Assertions prove presence, not layout: a green run with a broken-looking frame is a FAIL. Look for overflowing layout, placeholder copy, stale data, an off-by-one, a control that should be disabled. A genuine product failure stays red and becomes a finding — never reshape a scenario to turn a real red green. Fixing your own selector is the opposite, and needs no permission.
+4. **In a Rails app, resolve every URL before the browser sees it.** The checkout is a Rails app when it has a `config/routes.rb`. There, no URL in a scenario is hand-written or inferred from a controller name: a guessed path burns a whole QA run and comes back as a false finding.
 
-5. **Write the findings.** Each is one comment on one line, with a `path`, a `line` in the file's new state, and a body. Order them most important first: something *shown* broken outranks something argued from the diff, and a broken behavior always outranks a cleanliness point.
+   Derive the path from the routes for the controller and action the diff touches:
 
-6. **Make every finding committable.** Each finding carries a `suggestion` — the exact replacement for its anchored line(s), ready for GitHub's one-click commit — as the default, not a bonus. Write the fix, not a description of the fix. The only findings allowed to go without one are those no line replacement can express (a missing test, a migration to add, a cross-file rename), and those must instead end the body with the concrete change wanted — a fenced code block of the new code where one exists — so the author still copies rather than interprets. If you find yourself writing "consider…" with no code, you have not finished the finding.
+   ```bash
+   bin/rails runner 'ARGV.each { |t| Rails.application.routes.routes.select { |r| "#{r.defaults[:controller]}##{r.defaults[:action]}" == t }.each { |r| puts "#{r.verb}\t#{r.path.spec.to_s.sub("(.:format)", "")}\t#{r.name}" } }' domains#index
+   ```
+
+   Fill the dynamic segments from records that exist in the database you are driving, then confirm each finished URL resolves to the controller and action you meant:
+
+   ```bash
+   bin/rails runner 'ARGV.each { |p| r = (Rails.application.routes.recognize_path(p) rescue nil); puts "#{r ? "#{r[:controller]}##{r[:action]}" : "UNRECOGNIZED"}\t#{p}" }' http://app.example.localhost:3000/a/1/domains
+   ```
+
+   Pass the full URL, not a bare path. Host constraints are part of routing, so a bare path comes back UNRECOGNIZED for a route that resolves fine on the host that serves it, and a URL on the wrong host is exactly the mistake this catches. Add `, method: :post` for a non-GET route. Batch every URL into one invocation: booting Rails is the cost, the lookups are free. UNRECOGNIZED, or a controller and action other than the one you expected, is a defect in your scenario and gets fixed before the run, never reported as a finding.
+
+5. **Read the frames yourself.** Assertions prove presence, not layout: a green run with a broken-looking frame is a FAIL. Look for overflowing layout, placeholder copy, stale data, an off-by-one, a control that should be disabled. A genuine product failure stays red and becomes a finding — never reshape a scenario to turn a real red green. Fixing your own selector is the opposite, and needs no permission.
+
+6. **Write the findings.** Each is one comment on one line, with a `path`, a `line` in the file's new state, and a body. Order them most important first: something *shown* broken outranks something argued from the diff, and a broken behavior always outranks a cleanliness point.
+
+   **Say it in two sentences.** A body names the defect and its consequence, then stops. Do not walk the reader through how you arrived at it, do not pile on with "worse…", do not narrate what a customer would think, and do not tell the author what the finding should say — the `suggestion` carries the fix. "This check will no longer work post-decommission. At that point, the query would return nothing at all." is a complete finding; the paragraph that reasons its way to that same point is that finding padded. Cut hedges — `usually`, `typically`, `often`: if the behavior is conditional, name the condition, and if you are unsure it happens at all, you have not finished checking it.
+
+   **Below 70% certainty, ask instead of assert.** If you would not bet on a finding being real, phrase it as the question you actually have — "Does this still hold when the record is already archived?" — rather than as a statement you cannot stand behind. This is not the hedging above: a hedge blurs a defect you are sure of, while a question is honest about one you are not. A question still carries its `path`, `line` and the reason it occurred to you, but it carries no `suggestion`, since you are not claiming to know the fix. If you are under the bar and cannot even name the question, drop it.
+
+7. **Make every finding committable.** Each finding carries a `suggestion` — the exact replacement for its anchored line(s), ready for GitHub's one-click commit — as the default, not a bonus. Write the fix, not a description of the fix. The findings allowed to go without one are the questions above and those no line replacement can express (a missing test, a migration to add, a cross-file rename), and the latter must instead end the body with the concrete change wanted — a fenced code block of the new code where one exists — so the author still copies rather than interprets. If you find yourself writing "consider…" with no code, you have not finished the finding.
 
 **Keep provenance straight.** A frame symptom is not a proven code cause. If a frame makes you suspect a line, chase it in the code and report the conclusion with its `file:line`. Never dress a screenshot up as a code proof, nor a code read up as something you saw on screen.
 
@@ -173,13 +193,14 @@ If this code change is facing customers, that we need to review this from the pe
 
 Let's review this code change in terms of clean code, reusability, and observability.
 
-- [ ] Should we be tracking this in events or anlytics?
-- [ ] Does it makes sense to do this?
+- [ ] Should we be tracking this in events or analytics?
+- [ ] Does it make sense to do this?
 - [ ] Are all code changes in scope?
-- [ ] Are tests are complete and passing?
+- [ ] Are the tests complete and passing?
 - [ ] Is documentation accurate and complete?
 - [ ] Do all QA scenarios complete successfully?
 - [ ] Are we rescuing common network exceptions during third-party requests?
+- [ ] Is this against the framework's natural way?
 
 ### UI and UX
 
@@ -195,7 +216,7 @@ If this code changes how customers interact with our system, then we need to rev
 
 ### Marketing
 
-If this code change is facing customers, that we need to review this from the perspective of potential confusion, conversion, and how it fits into the overall system.
+If this code change is facing customers, then we need to review this from the perspective of potential confusion, conversion, and how it fits into the overall system.
 
 - [ ] Does it address the root cause?
 - [ ] Does the page content tell our story?
@@ -203,4 +224,3 @@ If this code change is facing customers, that we need to review this from the pe
 - [ ] Are spelling and grammar correct?
 - [ ] Are CTAs present?
 - [ ] Does it render successfully?
-```

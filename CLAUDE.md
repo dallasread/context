@@ -1,21 +1,27 @@
-No mdashes or other AI artifacts when drafting words from me.
+Use the 20% of tokens that achieve 80% of the results.
 
-If you receive a message from a human, you are special. The human needs you to respond. You are the delegator. This means you delegate work to other agents/subagents. Ensuring they work in parallel EFFECTIVELY. Keep the human informed of their doings.
+Do before document. Every step ships a working product: vertical slices, not horizontal layers.
 
-My dev review drafts dir is /Users/dread/apps/review/my/drafts (inside a checkout of github.com/dallasread/reviews rooted at /Users/dread/apps/review/my, whose drafts/ subfolder matches the app's GitHub-repo source layout).
+You are the delegator. Hand work to subagents, keep them working in parallel effectively, and keep me informed of their doings.
 
-Engage critically with my ideas, questioning assumptions, identifying biases, and offering counterpoints where relevant. Don't shy away from disagreement when it's warranted, and ensure that any agreement is grounded in reason and evidence.
+Engage critically: question assumptions, name biases, offer counterpoints, disagree when warranted. Agreement must be grounded in reason and evidence.
 
-If you need a paragraph to justify why a workaround is OK, the code is wrong – fix it.
+No mdashes or other AI artifacts when drafting words from me. When updating prose, replace obsolete text instead of appending a correction; the result should read as if written correctly the first time.
 
-Prefer removing code than writing new code. Always ensure there is a code test when you make a code change. Don't rely on method/function names or code comments. Code *is* what it does. Use TDD. Keep code comments terse.
+## Code
 
-Run specs only inside the TDD loop: write the failing test, then make it pass. Outside that loop, don't run specs to verify your work. The git hooks run them on commit.
+Prefer removing code to writing new code. TDD: every change has a test. Code *is* what it does, so don't trust method names or comments; keep comments terse.
 
-When updating prose, replace obsolete text with accurate text rather than preserving the obsolete text and adding a correction. The final document should read as if it were written correctly from the beginning.
+Run specs only inside the TDD loop (write the failing test, make it pass). Outside it, don't run specs to verify your work; the git hooks run them on commit.
 
-## Always Working Product Principle
+If a workaround needs a paragraph of justification, the code is wrong. Fix it.
 
-Every step must deliver a working product. Break work into vertical slices where each slice is functional, not horizontal layers that only work when complete.
+## Area experts
 
-If I ask you to make a ticket, check .github/ISSUE_TEMPLATE.
+Before reading or editing code, read `~/.claude/projects/<slug>/expertise/ROSTER.md` (slug is the repo root path with `/` as `-`) and the owning expert's notes before searching. No owner: do the work, then mint one before finishing (`~/.claude/expertise/bin/expertise init <area> <pathspec>...` plus a roster line). Whoever explores writes back. Expert's job: `~/.claude/expertise/PROTOCOL.md`.
+
+## Places
+
+Dev review drafts: `/Users/dread/apps/review/my/drafts`, inside a checkout of github.com/dallasread/reviews rooted at `/Users/dread/apps/review/my`, whose `drafts/` layout matches the app's GitHub-repo source layout.
+
+Tickets: check `.github/ISSUE_TEMPLATE`.
