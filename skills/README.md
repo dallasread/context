@@ -7,7 +7,7 @@ duplicates or reaches into a skill's internals).
 
 ## Two tiers
 
-- **Entry points** you invoke directly (`pickup`, `review-dry`, `pr-dry`).
+- **Entry points** you invoke directly (`pickup`, `review-dry`, `pr-dry`), or run on a schedule (`pr-feedback-fixer`).
 - **`util-*` helpers** that exist to serve the entry points; you rarely invoke them alone.
 
 One owner per capability: exactly one skill knows how to do a given thing, and
@@ -21,6 +21,7 @@ runner, a single formatter, and so on.
 | **pickup** | a ticket or a description of a thing to build | a plan (entry point, preconditions, side effects) agreed with you, then an implementation in a fresh worktree |
 | **review-dry** | a branch or PR to review | the review formatted for GitHub and put in front of you as a **draft** you read before anything is posted; posting, and the uploads it needs, happen only when you ask |
 | **pr-dry** | a branch to ship | a runnable PR title and description drafted from the repo's template, with the QA evidence folded in; nothing is created, pushed, or uploaded until you ask |
+| **pr-feedback-fixer** | nothing; it runs unattended, on a schedule | clear-cut review feedback on your open PRs fixed, pushed, replied to, and resolved; every other thread left unanswered on GitHub and listed in a report for you to decide |
 
 ## Helpers
 
