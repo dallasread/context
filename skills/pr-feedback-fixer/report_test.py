@@ -92,12 +92,12 @@ class ReportTest(unittest.TestCase):
         for s in ["showOpenFilePicker", "indexedDB", "queryPermission", "requestPermission", "setInterval(pollLog,30000)"]:
             self.assertIn(s, html)
 
-    def test_page_actions_live_in_one_menu(self):
+    def test_page_actions_are_labelled_icon_buttons(self):
         self.run_cmd("render")
         html = self.html()
-        menu = html.split('<details class="menu"')[1].split("</details>")[0]
-        for id in ["historyOpen", "logPick", "forget"]:
-            self.assertIn(f'id="{id}"', menu)
+        self.assertNotIn('class="menu"', html)
+        for id, label in [("historyOpen", "History"), ("logPick", "Load log file"), ("forget", "Forget GitHub token")]:
+            self.assertRegex(html, f'<button type="button" class="btn icon tool" id="{id}"[^>]* aria-label="{label}" title="{label}"><svg')
 
     def test_the_log_source_reads_as_a_status_not_an_action(self):
         self.run_cmd("render")

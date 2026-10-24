@@ -192,9 +192,7 @@ textarea{border-radius:10px;resize:vertical}
 .btn{font:inherit;font-size:14px;font-weight:600;border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:8px;padding:6px 12px;min-height:36px;cursor:pointer}
 .btn:hover{background:var(--hover)}.btn.primary{background:var(--focus);border-color:var(--focus);color:var(--on-focus)}.btn:disabled{opacity:.5;cursor:wait}
 .btn.small{min-height:30px;padding:3px 10px;font-size:13px;margin-top:8px}
-.menu{position:relative;margin-left:auto}.menu summary{list-style:none}.menu summary::-webkit-details-marker{display:none}
-.menu-list{position:absolute;right:0;top:calc(100% + 4px);z-index:5;min-width:210px;display:flex;flex-direction:column;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--bg);box-shadow:0 8px 24px rgba(0,0,0,.14)}
-.menu-item{font:inherit;font-size:14px;text-align:left;background:none;border:0;border-radius:6px;padding:8px 10px;color:var(--fg);cursor:pointer}.menu-item:hover{background:var(--hover)}
+.tools{margin-left:auto;display:flex;gap:6px}.btn.tool{margin-top:8px;min-height:32px;min-width:32px;padding:0;display:inline-grid;place-items:center}.btn.tool[hidden]{display:none}
 .drop-zone{position:fixed;inset:0;z-index:20;display:grid;place-items:center;background:color-mix(in srgb,var(--bg) 85%,transparent);border:3px dashed var(--focus);font-size:20px;font-weight:600;pointer-events:none}.drop-zone[hidden]{display:none}
 .wrap{border:1px solid var(--line);border-radius:10px;overflow:hidden}
 table{width:100%;border-collapse:collapse}
@@ -276,7 +274,7 @@ dialog::backdrop{background:rgba(15,23,42,.55)}dialog h2{margin:0 0 8px;font-siz
  tr.row td{border:0;padding:4px 0;display:grid;grid-template-columns:90px 1fr;gap:8px}tr.row td::before{content:attr(data-label);font-size:13px;font-weight:600;color:var(--muted)}
  .bubble{max-width:100%}}
 </style></head><body><main>
-<h1>PR Feedback Fixer</h1><div class="sub"><span>The latest state of each review thread from the last 30 days. Generated __GENERATED__.</span><span class="status" id="logStatus"></span><details class="menu"><summary class="btn small">Menu</summary><div class="menu-list"><button type="button" class="menu-item" id="historyOpen">History</button><button type="button" class="menu-item" id="logPick" hidden>Load log file…</button><button type="button" class="menu-item" id="forget" hidden>Forget GitHub token</button></div></details></div>
+<h1>PR Feedback Fixer</h1><div class="sub"><span>The latest state of each review thread from the last 30 days. Generated __GENERATED__.</span><span class="status" id="logStatus"></span><span class="tools"><button type="button" class="btn icon tool" id="historyOpen" aria-label="History" title="History"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg></button><button type="button" class="btn icon tool" id="logPick" hidden aria-label="Load log file" title="Load log file"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button><button type="button" class="btn icon tool" id="forget" hidden aria-label="Forget GitHub token" title="Forget GitHub token"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="3.5"/><path d="M10 13l9-9M16 7l2 2M14 9l2 2"/></svg></button></span></div>
 <div id="dropZone" class="drop-zone" hidden><p>Drop log.jsonl to use it</p></div>
 <div class="filters" role="search">
 <div class="field"><label for="q">Search</label><input type="search" id="q" placeholder="Repository, title, comment, reviewer, commit"></div>
@@ -460,11 +458,11 @@ function redraw(){draw();if(histPane.open)drawHistory();
  const typing=document.activeElement&&document.activeElement.matches("#drawer textarea");if(active&&byId.has(active)&&!typing)openDrawer(active)}
 const logStatus=t=>$("logStatus").textContent=t;
 async function pollLog(){if(!logHandle)return;try{const f=await logHandle.getFile();if(f.lastModified!==logStamp){logStamp=f.lastModified;
- if(store.restore(PFF.parseJsonl(await f.text()))){rebuild();redraw()}}logStatus("Using "+f.name+" · updated "+rel(new Date(f.lastModified).toISOString()))}catch(e){logStatus("Can't read "+logHandle.name+" any more. Load it again from the menu.")}}
-const pick=$("logPick");
-function watch(h){logHandle=h;savedHandle=null;logStamp=0;pick.textContent="Choose another log file…";logStatus("Using "+h.name);pollLog();if(!polling)polling=setInterval(pollLog,30000)}
+ if(store.restore(PFF.parseJsonl(await f.text()))){rebuild();redraw()}}logStatus("Using "+f.name+" · updated "+rel(new Date(f.lastModified).toISOString()))}catch(e){logStatus("Can't read "+logHandle.name+" any more. Click the folder to load it again.")}}
+const pick=$("logPick"),pickLabel=t=>{pick.setAttribute("aria-label",t);pick.title=t};
+function watch(h){logHandle=h;savedHandle=null;logStamp=0;pickLabel("Choose another log file");logStatus("Using "+h.name);pollLog();if(!polling)polling=setInterval(pollLog,30000)}
 if(window.showOpenFilePicker){pick.hidden=false;
- IDB.get("log").then(async h=>{if(!h)return;if(await h.queryPermission({mode:"read"})==="granted")watch(h);else{savedHandle=h;pick.textContent="Reconnect "+h.name}}).catch(()=>{});
+ IDB.get("log").then(async h=>{if(!h)return;if(await h.queryPermission({mode:"read"})==="granted")watch(h);else{savedHandle=h;pickLabel("Reconnect "+h.name);logStatus("Click the folder to reconnect "+h.name)}}).catch(()=>{});
  pick.addEventListener("click",async()=>{try{if(savedHandle&&await savedHandle.requestPermission({mode:"read"})==="granted"){watch(savedHandle);return}
   const[h]=await showOpenFilePicker({types:[{description:"Event log",accept:{"text/plain":[".jsonl"]}}]});await IDB.set("log",h);watch(h)}catch(e){}})}
 const zone=$("dropZone"),hasFiles=e=>[...((e.dataTransfer&&e.dataTransfer.types)||[])].includes("Files");let dragDepth=0;
@@ -476,9 +474,6 @@ addEventListener("drop",async e=>{if(!hasFiles(e))return;e.preventDefault();drag
  if(!file||!file.name.endsWith(".jsonl")){logStatus("Drop a .jsonl log file.");return}
  const h=hp&&await hp.catch(()=>null);if(h&&h.kind==="file"){try{await IDB.set("log",h)}catch(err){}watch(h);return}
  if(store.restore(PFF.parseJsonl(await file.text()))){rebuild();redraw()}logStatus("Loaded "+file.name+" once. This browser can't watch it for changes.")});
-const menu=document.querySelector(".menu");
-menu.addEventListener("click",e=>{if(e.target.closest(".menu-item"))menu.open=false});
-document.addEventListener("click",e=>{if(menu.open&&!menu.contains(e.target))menu.open=false});
 FIELDS.forEach(id=>$(id).addEventListener("input",()=>{saveFilters();draw()}));draw();
 """
 
