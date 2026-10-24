@@ -5,10 +5,12 @@
                 [--path P] [--reviewer L] [--sha S] [--note TEXT] [--at ISO8601]
   report.py render
 
-`add` appends one JSON line to LOG_FILE. `render` writes REPORT_FILE with the
-latest entry of each thread from the last 30 days, and prunes older lines. It
-reads each thread's comments and code from GitHub through `gh` (GH), and
-renders without them when GitHub can't be reached.
+LOG_FILE is an event log, one event per line. `add` appends a `classified`
+event. `render` reads each thread from GitHub through `gh` (GH), appends an
+`observed` event when the thread differs from its last snapshot, drops the
+threads with no event in the last 30 days, and writes REPORT_FILE with the
+events inlined. The page folds the events with store.js. It renders without
+snapshots when GitHub can't be reached.
 """
 import argparse, base64, hashlib, html, json, os, subprocess, sys
 from datetime import datetime, timedelta, timezone
@@ -21,6 +23,8 @@ CODE_DIR = os.environ.get("CODE_DIR", os.path.expanduser("~/apps"))
 OUTCOMES = ["fixed", "already_fixed", "deferred", "question", "skipped"]
 RENAMED = {"noted": "deferred"}
 DAYS = 30
+VERSION = "v1"
+STORE_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "store.js")
 THREAD_FIELDS = "isResolved isOutdated line startLine path comments(first: 50) { nodes { id author { login } body createdAt url diffHunk reactionGroups { content viewerHasReacted reactors { totalCount } } } }"
 
 
@@ -28,23 +32,56 @@ def now():
     return datetime.now(timezone.utc)
 
 
+def ms(t):
+    return int(t.timestamp() * 1000)
+
+
+def event(object_id, action, data, time):
+    return {"key": f"{time}/threads/{object_id}/{action}/{VERSION}", "time": time, "collection": "threads",
+            "objectId": object_id, "action": action, "data": data, "version": VERSION}
+
+
 def add(args):
     entry = {k: v for k, v in vars(args).items() if k != "cmd" and v is not None}
     entry.setdefault("at", now().isoformat(timespec="seconds"))
+    time = ms(datetime.fromisoformat(entry["at"])) if args.at else ms(now())
     with open(LOG_FILE, "a") as f:
-        f.write(json.dumps(entry) + "\n")
+        f.write(json.dumps(event(args.thread, "classified", entry, time)) + "\n")
 
 
-def recent_lines():
+def read_events():
+    """The log as events, oldest first. A line from before the log held events reads as a classified event."""
     if not os.path.exists(LOG_FILE):
         return []
-    cutoff = now() - timedelta(days=DAYS)
+    events, keys = [], set()
     with open(LOG_FILE) as f:
-        lines = [l for l in f if l.strip()]
-    entries = [json.loads(l) for l in lines]
-    for e in entries:
-        e["outcome"] = RENAMED.get(e["outcome"], e["outcome"])
-    return [json.dumps(e) + "\n" for e in entries if datetime.fromisoformat(e["at"]) >= cutoff]
+        for line in f:
+            if not line.strip():
+                continue
+            e = json.loads(line)
+            if "action" not in e:
+                e = event(e["thread"], "classified", e, ms(datetime.fromisoformat(e["at"])))
+                while e["key"] in keys:
+                    e = event(e["objectId"], e["action"], e["data"], e["time"] + 1)
+            if e["action"] == "classified":
+                e["data"]["outcome"] = RENAMED.get(e["data"]["outcome"], e["data"]["outcome"])
+            if e["key"] not in keys:
+                keys.add(e["key"])
+                events.append(e)
+    return sorted(events, key=lambda e: (e["time"], e["key"]))
+
+
+def prune(events):
+    """Drops every event of a thread whose newest event is older than DAYS; keeps all events of the others."""
+    newest = {}
+    for e in events:
+        newest[e["objectId"]] = max(newest.get(e["objectId"], 0), e["time"])
+    cutoff = ms(now() - timedelta(days=DAYS))
+    return [e for e in events if newest[e["objectId"]] >= cutoff]
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
 def to_ctx(node):
@@ -101,29 +138,26 @@ def checkouts():
 
 
 def render():
-    lines = recent_lines()
-    with open(LOG_FILE if os.path.exists(LOG_FILE) else os.devnull, "w") as f:
+    events = prune(read_events())
+    latest = {e["objectId"]: e["data"] for e in events if e["action"] == "observed"}
+    time = ms(now())
+    for thread, ctx in fetch_threads(sorted({e["objectId"] for e in events if e["action"] == "classified"})).items():
+        if thread not in latest or digest(latest[thread]) != digest(ctx):
+            events.append(event(thread, "observed", ctx, time))
+    lines = [json.dumps(e) + "\n" for e in events]
+    with open(LOG_FILE, "w") as f:
         f.writelines(lines)
-    latest = {}
-    for l in lines:
-        e = json.loads(l)
-        latest[e["thread"]] = e
-    rows = sorted(latest.values(), key=lambda e: e["at"], reverse=True)
-    ctx = fetch_threads([r["thread"] for r in rows])
-    dirs = checkouts()
-    for r in rows:
-        if r["repo"] in dirs:
-            r["folder"] = dirs[r["repo"]]
-        if r["thread"] in ctx:
-            r["ctx"] = ctx[r["thread"]]
-    jsonl = "".join(json.dumps(r).replace("<", "\\u003c") + "\n" for r in rows)
-    script = (SCRIPT.replace("__OUTCOMES__", json.dumps(OUTCOMES)).replace("__ME__", json.dumps(my_login()))
-              .replace("__THREAD_FIELDS__", json.dumps(THREAD_FIELDS)))
-    digest = base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
-    page = (PAGE.replace("__CSP_HASH__", digest)
+    jsonl = "".join(l.replace("<", "\\u003c") for l in lines)
+    folders = json.dumps(checkouts()).replace("<", "\\u003c")
+    with open(STORE_FILE) as f:
+        store = f.read()
+    script = store + (SCRIPT.replace("__OUTCOMES__", json.dumps(OUTCOMES)).replace("__ME__", json.dumps(my_login()))
+                      .replace("__THREAD_FIELDS__", json.dumps(THREAD_FIELDS)))
+    csp = base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
+    page = (PAGE.replace("__CSP_HASH__", csp)
             .replace("__GENERATED__", html.escape(now().strftime("%Y-%m-%d %H:%M UTC"))))
     with open(REPORT_FILE, "w") as f:
-        f.write(page.replace("__SCRIPT__", script).replace("__ROWS__", jsonl))
+        f.write(page.replace("__FOLDERS__", folders).replace("__SCRIPT__", script).replace("__ROWS__", jsonl))
 
 
 PAGE = r"""<!doctype html>
@@ -211,7 +245,7 @@ dialog#drawer::backdrop{background:rgba(15,23,42,.35)}
 dialog#history{margin:0 0 0 auto;inset:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(480px,100vw);max-width:100vw;border:0;border-left:1px solid var(--line);border-radius:0;padding:0;flex-direction:column}
 dialog#history[open]{display:flex;animation:slide .18s ease-out}dialog#history::backdrop{background:rgba(15,23,42,.35)}
 dialog#history h2{margin:0;font-size:17px}dialog#history .close{margin-left:auto}
-.hist-list{list-style:none;margin:0}.hist{padding:10px 0;border-bottom:1px solid var(--line)}.hist.undone{opacity:.6}.hist.undone strong{text-decoration:line-through}
+.hist-list{list-style:none;margin:0}.hist{padding:10px 0;border-bottom:1px solid var(--line)}
 .hist .excerpt{display:block;font-size:14px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hist-meta{display:flex;gap:12px;align-items:center;font-size:13px;color:var(--muted)}.hist-meta .btn.small{margin:0 0 0 auto}
 .drawer-head{padding:12px 20px 14px;border-bottom:1px solid var(--line);background:var(--panel)}
@@ -238,7 +272,7 @@ dialog::backdrop{background:rgba(15,23,42,.55)}dialog h2{margin:0 0 8px;font-siz
  tr.row td{border:0;padding:4px 0;display:grid;grid-template-columns:90px 1fr;gap:8px}tr.row td::before{content:attr(data-label);font-size:13px;font-weight:600;color:var(--muted)}
  .bubble{max-width:100%}}
 </style></head><body><main>
-<h1>PR Feedback Fixer</h1><p class="sub"><span>The latest state of each review thread from the last 30 days. Generated __GENERATED__.</span><button type="button" class="btn small" id="historyOpen">History</button><button type="button" class="btn small" id="forget" hidden>Forget GitHub token</button></p>
+<h1>PR Feedback Fixer</h1><p class="sub"><span>The latest state of each review thread from the last 30 days. Generated __GENERATED__.</span><button type="button" class="btn small" id="historyOpen">History</button><button type="button" class="btn small" id="logPick" hidden>Load log file</button><button type="button" class="btn small" id="forget" hidden>Forget GitHub token</button></p>
 <div class="filters" role="search">
 <div class="field"><label for="q">Search</label><input type="search" id="q" placeholder="Repository, title, comment, reviewer, commit"></div>
 <div class="field"><label for="status">Status</label><select id="status"><option value="">All</option><option value="no" selected>Needs you</option><option value="yes">Handled</option></select></div>
@@ -261,32 +295,39 @@ dialog::backdrop{background:rgba(15,23,42,.55)}dialog h2{margin:0 0 8px;font-siz
 <a href="https://github.com/settings/personal-access-tokens/new">Create a token</a></div></dialog>
 <script type="application/jsonl" id="rows">
 __ROWS__</script>
+<script type="application/json" id="folders">
+__FOLDERS__</script>
 <script>__SCRIPT__</script></body></html>
 """
 
 SCRIPT = r"""
-const ROWS=document.getElementById("rows").textContent.split("\n").filter(l=>l.trim()).map(l=>JSON.parse(l)), OUTCOMES=__OUTCOMES__, on=new Set(OUTCOMES);
-const ME=__ME__, THREAD_FIELDS=__THREAD_FIELDS__;
+const OUTCOMES=__OUTCOMES__, on=new Set(OUTCOMES);
+const ME=__ME__, THREAD_FIELDS=__THREAD_FIELDS__, FOLDERS=JSON.parse(document.getElementById("folders").textContent);
 const $=id=>document.getElementById(id), esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const label=o=>o.replace("_"," ").replace(/^./,c=>c.toUpperCase());
-const byId=new Map(ROWS.map(r=>[r.thread,r])), drafts=new Map();
-const handled=r=>{const c=r.ctx;return !!(c&&(c.resolved||c.comments.length&&c.comments[c.comments.length-1].author===ME))};
+const drafts=new Map(), handled=r=>PFF.handled(r,ME);
 const EMOJI={THUMBS_UP:"👍",THUMBS_DOWN:"👎",LAUGH:"😄",HOORAY:"🎉",CONFUSED:"😕",HEART:"❤️",ROCKET:"🚀",EYES:"👀"};
 let active=null, current=[];
 const excerpt=r=>{const c=r.ctx,m=c&&(c.comments.find(x=>x.author!==ME)||c.comments[0]);return m?String(m.body||"").replace(/```[\s\S]*?```/g," ").replace(/\s+/g," ").trim():""};
-ROWS.forEach(r=>r.excerpt=excerpt(r));
+// The log's events plus the page's own: what GitHub answered after this page acted. Merged by key.
+const store=new PFF.EventStore(), EKEY="pr-feedback-fixer:events", KEEP=30*864e5;
+let pageEvents=[];try{pageEvents=JSON.parse(localStorage.getItem(EKEY)||"[]").filter(e=>e&&e.time>=Date.now()-KEEP)}catch(e){}
+store.restore(PFF.parseJsonl(document.getElementById("rows").textContent));store.restore(pageEvents);
+let ROWS=[], byId=new Map(), HIST=[];
+function rebuild(){const s=store.state();ROWS=PFF.threads(s);ROWS.forEach(r=>{r.excerpt=excerpt(r);r.folder=FOLDERS[r.repo]});byId=new Map(ROWS.map(r=>[r.thread,r]));HIST=PFF.history(s,ME)}
+rebuild();
+function observe(t,ctx){const r=byId.get(t);if(r&&r.ctx&&PFF.stable(r.ctx)===PFF.stable(ctx))return;
+ const e=PFF.event(t,"observed",ctx);store.track(e);pageEvents=[...pageEvents.filter(x=>x.time>=Date.now()-KEEP),e];try{localStorage.setItem(EKEY,JSON.stringify(pageEvents))}catch(err){}}
 let token=null;
-const HKEY="pr-feedback-fixer:history", HLABEL={reply:"Replied",resolve:"Resolved",react:"Reacted",unreact:"Removed reaction"};
-let hist=[];try{hist=JSON.parse(localStorage.getItem(HKEY)||"[]").filter(h=>HLABEL[h.kind])}catch(e){}
-function saveHist(){try{localStorage.setItem(HKEY,JSON.stringify(hist))}catch(e){}drawHistory()}
-function log(kind,thread,extra){hist.unshift({kind,thread,at:new Date().toISOString(),...extra});hist=hist.slice(0,200);saveHist()}
+const HLABEL={reply:"Replied",unreply:"Deleted reply",resolve:"Resolved",unresolve:"Unresolved",react:"Reacted",unreact:"Removed reaction"};
 const FKEY="pr-feedback-fixer:filters", FIELDS=["q","status","since"];
 function saveFilters(){try{localStorage.setItem(FKEY,JSON.stringify({...Object.fromEntries(FIELDS.map(id=>[id,$(id).value])),outcomes:[...on]}))}catch(e){}}
 try{const f=JSON.parse(localStorage.getItem(FKEY)||"null");if(f){FIELDS.forEach(id=>{if(f[id]!=null&&[...($(id).options||[{value:f[id]}])].some(o=>o.value==f[id]))$(id).value=f[id]});
  if(Array.isArray(f.outcomes)){on.clear();f.outcomes.forEach(o=>on.add(o))}}}catch(e){}
 document.addEventListener("error",e=>{if(e.target.tagName==="IMG")e.target.style.visibility="hidden"},true);
-OUTCOMES.forEach(o=>{const n=ROWS.filter(r=>r.outcome==o).length,c=document.createElement("button");c.type="button";c.className="toggle o-"+o;
- c.textContent=label(o)+" ("+n+")";c.setAttribute("aria-pressed",on.has(o));
+const chips=new Map();
+OUTCOMES.forEach(o=>{const c=document.createElement("button");chips.set(o,c);c.type="button";c.className="toggle o-"+o;
+ c.setAttribute("aria-pressed",on.has(o));
  c.onclick=()=>{on.has(o)?on.delete(o):on.add(o);c.setAttribute("aria-pressed",on.has(o));saveFilters();draw()};$("chips").append(c)});
 const rel=t=>{const m=(Date.now()-Date.parse(t))/6e4;return m<60?Math.max(1,Math.round(m))+" min ago":m<1440?Math.round(m/60)+" h ago":Math.round(m/1440)+" d ago"};
 const avatar=(l,s)=>l?`<img src="https://github.com/${encodeURIComponent(l)}.png?size=${s*2}" alt="" width="${s}" height="${s}" loading="lazy">`:"";
@@ -327,7 +368,7 @@ function confetti(){if(matchMedia("(prefers-reduced-motion: reduce)").matches)re
  for(let i=0;i<140;i++){const p=document.createElement("i");p.style.left=Math.random()*100+"vw";p.style.background=colors[i%colors.length];
   p.style.animationDelay=Math.random()*.7+"s";p.style.animationDuration=2+Math.random()*1.6+"s";p.style.setProperty("--x",(Math.random()-.5)*240+"px");p.style.setProperty("--r",(Math.random()*4-2)*360+"deg");box.append(p)}
  (document.querySelector("dialog[open]")||document.body).append(box);setTimeout(()=>box.remove(),4800)}
-function draw(){celebrate();const q=$("q").value.toLowerCase(),v=$("since").value,since=Date.now()-parseInt(v)*(v.endsWith("h")?36e5:864e5);
+function draw(){celebrate();chips.forEach((c,o)=>c.textContent=label(o)+" ("+ROWS.filter(r=>r.outcome==o).length+")");const q=$("q").value.toLowerCase(),v=$("since").value,since=Date.now()-parseInt(v)*(v.endsWith("h")?36e5:864e5);
  const rs=ROWS.filter(r=>on.has(r.outcome)&&
   (!$("status").value||handled(r)==($("status").value=="yes"))&&Date.parse(r.at)>=since
   &&(!q||[r.repo,r.repo+"#"+r.pr,r.title,r.path,r.note,r.reviewer,r.sha,r.excerpt].join(" ").toLowerCase().includes(q)));
@@ -354,38 +395,36 @@ async function gql(query,variables){const res=await fetch("https://api.github.co
  if(res.status===401){token=null;updateTokenUi();throw new Error("GitHub rejected the token. Nothing was sent.")}
  const j=await res.json().catch(()=>({}));if(!res.ok||j.errors)throw new Error("GitHub error: "+((j.errors&&j.errors[0].message)||res.status));return j.data}
 const DONE={reply:"Reply posted.","reply-resolve":"Reply posted and thread resolved.",resolve:"Thread resolved.",refresh:"Thread refreshed."};
-function refreshViews(t,msg,focus){const r=byId.get(t);r.excerpt=excerpt(r);draw();openDrawer(t,focus);if(msg)status(msg)}
-async function act(btn){const t=active,r=byId.get(t),ta=$("reply-text"),a=btn.dataset.act,body=ta.value.trim();
+function refreshViews(t,msg,focus){draw();if(byId.has(t))openDrawer(t,focus);if(msg)status(msg)}
+// Commands act on GitHub, then track what GitHub answers. State only ever comes from the store.
+async function reobserve(t){const d=await gql("query($t:ID!){node(id:$t){... on PullRequestReviewThread{"+THREAD_FIELDS+"}}}",{t});if(d.node)observe(t,toCtx(d.node));rebuild()}
+async function act(btn){const t=active,ta=$("reply-text"),a=btn.dataset.act,body=ta.value.trim();
  if(a.startsWith("reply")&&!body){status("Write a reply first.");ta.focus();return}
  if(!await getToken()){status("No token. Nothing was sent.");return}
  const buttons=$("drawer").querySelectorAll(".reply button");buttons.forEach(b=>b.disabled=true);status("Working…");
- try{if(a.startsWith("reply")){const d=await gql("mutation($t:ID!,$b:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$t,body:$b}){comment{id author{login} body createdAt url}}}",{t,b:body}),m=d.addPullRequestReviewThreadReply.comment;
-   r.ctx=r.ctx||{comments:[],path:r.path,hunk:""};r.ctx.comments.push({id:m.id,author:m.author&&m.author.login,body:m.body,at:m.createdAt,url:m.url,reactions:[]});drafts.delete(t);log("reply",t,{comment:m.id,url:m.url,body:m.body.slice(0,200)})}
-  if(a.endsWith("resolve")){await gql("mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}",{t});r.ctx=r.ctx||{comments:[],path:r.path,hunk:""};r.ctx.resolved=true;log("resolve",t)}
-  if(a==="refresh"){const d=await gql("query($t:ID!){node(id:$t){... on PullRequestReviewThread{"+THREAD_FIELDS+"}}}",{t});r.ctx=toCtx(d.node)}
-  refreshViews(t,DONE[a])
+ try{if(a.startsWith("reply")){await gql("mutation($t:ID!,$b:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$t,body:$b}){comment{id}}}",{t,b:body});drafts.delete(t)}
+  if(a.endsWith("resolve"))await gql("mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}",{t});
+  await reobserve(t);refreshViews(t,DONE[a])
  }catch(err){status(err.message);buttons.forEach(b=>b.disabled=false)}}
 const reactMutation=add=>`mutation($s:ID!,$c:ReactionContent!){${add?"addReaction":"removeReaction"}(input:{subjectId:$s,content:$c}){reaction{content}}}`;
-function applyReaction(m,k,add){const rs=m.reactions=m.reactions||[],x=rs.find(z=>z.content===k);
- if(!add){if(x){x.count--;x.mine=false;if(!x.count)rs.splice(rs.indexOf(x),1)}}else if(x){x.count++;x.mine=true}else rs.push({content:k,count:1,mine:true})}
 async function react(btn){const t=active,m=byId.get(t).ctx.comments[+btn.dataset.c],k=btn.dataset.react,x=(m.reactions||[]).find(z=>z.content===k),mine=!!(x&&x.mine);
  if(!await getToken()){status("No token. Nothing was sent.");return}
  btn.disabled=true;
- try{await gql(reactMutation(!mine),{s:m.id,c:k});applyReaction(m,k,!mine);log(mine?"unreact":"react",t,{comment:m.id,content:k});
+ try{await gql(reactMutation(!mine),{s:m.id,c:k});await reobserve(t);
   refreshViews(t,(mine?"Removed ":"Added ")+rlabel(k).toLowerCase()+".")
  }catch(err){status(err.message);btn.disabled=false}}
-function drawHistory(){$("historyList").innerHTML=hist.length?hist.map((h,i)=>{const r=byId.get(h.thread);
- return `<li class="hist${h.undone?" undone":""}"><div><strong>${esc(HLABEL[h.kind]||h.kind)}</strong>${h.content?" "+(EMOJI[h.content]||esc(h.content)):""} on <button type="button" class="pick" data-thread="${esc(h.thread)}">${r?esc(r.repo+"#"+r.pr):"a thread"}</button>${r&&r.title?` <span class="muted">${esc(r.title)}</span>`:""}</div>
-  ${h.body?`<span class="excerpt">${esc(h.body)}</span>`:""}<div class="hist-meta"><time datetime="${esc(h.at)}" title="${esc(new Date(h.at).toLocaleString())}">${esc(rel(h.at))}</time>${h.url?`<a href="${esc(h.url)}">Open on GitHub</a>`:""}${h.undone?"<span>Undone</span>":`<button type="button" class="btn small" data-undo="${i}">Undo</button>`}</div></li>`}).join("")
+function drawHistory(){$("historyList").innerHTML=HIST.length?HIST.map((h,i)=>{const r=byId.get(h.thread);
+ return `<li class="hist"><div><strong>${esc(HLABEL[h.kind]||h.kind)}</strong>${h.content?" "+(EMOJI[h.content]||esc(h.content)):""} on <button type="button" class="pick" data-thread="${esc(h.thread)}">${r?esc(r.repo+"#"+r.pr):"a thread"}</button>${r&&r.title?` <span class="muted">${esc(r.title)}</span>`:""}</div>
+  ${h.body?`<span class="excerpt">${esc(h.body)}</span>`:""}<div class="hist-meta"><time datetime="${esc(h.at)}" title="${esc(new Date(h.at).toLocaleString())}">${esc(rel(h.at))}</time>${h.url?`<a href="${esc(h.url)}">Open on GitHub</a>`:""}${h.undoable?`<button type="button" class="btn small" data-undo="${i}">Undo</button>`:""}</div></li>`}).join("")
  :'<li class="muted">No actions yet. Replies, resolves, and reactions show here.</li>'}
 function hstatus(msg){$("historyStatus").textContent=msg}
-async function undo(btn){const h=hist[+btn.dataset.undo],r=byId.get(h.thread),c=r&&r.ctx;
+async function undo(btn){const h=HIST[+btn.dataset.undo];
  if(!await getToken()){hstatus("No token. Nothing was sent.");return}
  btn.disabled=true;hstatus("Undoing…");
- try{if(h.kind==="reply"){await gql("mutation($id:ID!){deletePullRequestReviewComment(input:{id:$id}){clientMutationId}}",{id:h.comment});if(c)c.comments=c.comments.filter(m=>m.id!==h.comment)}
-  if(h.kind==="resolve"){await gql("mutation($t:ID!){unresolveReviewThread(input:{threadId:$t}){thread{isResolved}}}",{t:h.thread});if(c)c.resolved=false}
-  if(h.kind.endsWith("react")){const add=h.kind==="unreact",m=c&&c.comments.find(x=>x.id===h.comment);await gql(reactMutation(add),{s:h.comment,c:h.content});if(m)applyReaction(m,h.content,add)}
-  h.undone=true;if(r)r.excerpt=excerpt(r);saveHist();draw();hstatus("Undid: "+(HLABEL[h.kind]||h.kind).toLowerCase()+".")
+ try{if(h.kind==="reply")await gql("mutation($id:ID!){deletePullRequestReviewComment(input:{id:$id}){clientMutationId}}",{id:h.comment});
+  if(h.kind==="resolve")await gql("mutation($t:ID!){unresolveReviewThread(input:{threadId:$t}){thread{isResolved}}}",{t:h.thread});
+  if(h.kind.endsWith("react"))await gql(reactMutation(h.kind==="unreact"),{s:h.comment,c:h.content});
+  await reobserve(h.thread);draw();drawHistory();hstatus("Undid: "+(HLABEL[h.kind]||h.kind).toLowerCase()+".")
  }catch(err){hstatus(err.message);btn.disabled=false}}
 const histPane=$("history");
 $("historyOpen").addEventListener("click",()=>{hstatus("");drawHistory();histPane.showModal();histPane.querySelector("[data-close]").focus()});
@@ -407,6 +446,21 @@ drawer.addEventListener("input",e=>{const t=e.target.dataset.draft;if(t)drafts.s
 drawer.addEventListener("keydown",e=>{if(e.target.closest("textarea,input"))return;if(e.key==="j"||e.key==="ArrowDown"&&e.altKey)nav(1);if(e.key==="k"||e.key==="ArrowUp"&&e.altKey)nav(-1)});
 drawer.addEventListener("close",()=>{const t=active;active=null;document.querySelectorAll("tr.row.active").forEach(tr=>tr.classList.remove("active"));
  const o=document.querySelector(`[data-open="${CSS.escape(t||"")}"]`);if(o)o.focus()});
+// Reload: a picked log file is re-read every 30 seconds and its new events merged in. The handle lives in IndexedDB.
+const IDB={open:()=>new Promise((res,rej)=>{const q=indexedDB.open("pr-feedback-fixer",1);q.onupgradeneeded=()=>q.result.createObjectStore("handles");q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error)}),
+ get:async k=>{const db=await IDB.open();return new Promise(res=>{const q=db.transaction("handles").objectStore("handles").get(k);q.onsuccess=()=>res(q.result);q.onerror=()=>res(null)})},
+ set:async(k,v)=>{const db=await IDB.open();return new Promise(res=>{const tx=db.transaction("handles","readwrite");tx.objectStore("handles").put(v,k);tx.oncomplete=tx.onerror=()=>res()})}};
+let logHandle=null, savedHandle=null, logStamp=0, polling=null;
+function redraw(){draw();if(histPane.open)drawHistory();
+ const typing=document.activeElement&&document.activeElement.matches("#drawer textarea");if(active&&byId.has(active)&&!typing)openDrawer(active)}
+async function pollLog(){if(!logHandle)return;try{const f=await logHandle.getFile();if(f.lastModified===logStamp)return;logStamp=f.lastModified;
+ if(store.restore(PFF.parseJsonl(await f.text()))){rebuild();redraw()}}catch(e){}}
+const pick=$("logPick");
+function watch(h){logHandle=h;savedHandle=null;pick.textContent="Reloading "+h.name;pollLog();if(!polling)polling=setInterval(pollLog,30000)}
+if(window.showOpenFilePicker){pick.hidden=false;
+ IDB.get("log").then(async h=>{if(!h)return;if(await h.queryPermission({mode:"read"})==="granted")watch(h);else{savedHandle=h;pick.textContent="Reconnect "+h.name}}).catch(()=>{});
+ pick.addEventListener("click",async()=>{try{if(savedHandle&&await savedHandle.requestPermission({mode:"read"})==="granted"){watch(savedHandle);return}
+  const[h]=await showOpenFilePicker({types:[{description:"Event log",accept:{"text/plain":[".jsonl"]}}]});await IDB.set("log",h);watch(h)}catch(e){}})}
 FIELDS.forEach(id=>$(id).addEventListener("input",()=>{saveFilters();draw()}));draw();
 """
 

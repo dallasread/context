@@ -23,10 +23,74 @@ class ReportTest(unittest.TestCase):
     def run_cmd(self, *args):
         subprocess.run([sys.executable, SCRIPT, *args], env=self.env, check=True)
 
-    def rows(self):
-        html = open(self.env["REPORT_FILE"]).read()
-        jsonl = html.split('<script type="application/jsonl" id="rows">')[1].split("</script>")[0]
+    def events(self):
+        jsonl = self.html().split('<script type="application/jsonl" id="rows">')[1].split("</script>")[0]
         return [json.loads(l) for l in jsonl.splitlines() if l.strip()]
+
+    def log(self):
+        with open(self.env["LOG_FILE"]) as f:
+            return [json.loads(l) for l in f if l.strip()]
+
+    def rows(self):
+        """Each thread's latest classification, with its latest GitHub snapshot as ctx, newest first."""
+        threads = {}
+        for e in sorted(self.events(), key=lambda e: (e["time"], e["key"])):
+            t = threads.setdefault(e["objectId"], {})
+            if e["action"] == "classified":
+                t.update(e["data"], _time=e["time"])
+            if e["action"] == "observed":
+                t["ctx"] = e["data"]
+        return [{k: v for k, v in t.items() if k != "_time"} for t in sorted((t for t in threads.values() if "_time" in t), key=lambda t: -t["_time"])]
+
+    def folders(self):
+        return json.loads(self.html().split('<script type="application/json" id="folders">')[1].split("</script>")[0])
+
+    def gh_thread(self, resolved=False):
+        return {"id": "T1", "isResolved": resolved, "isOutdated": False, "line": 1, "startLine": None, "path": "a.rb", "comments": {"nodes": [
+            {"id": "C1", "reactionGroups": [], "author": {"login": "rev"}, "body": "Fix", "createdAt": "2026-10-23T00:00:00Z", "url": "https://c1", "diffHunk": "@@"}]}}
+
+    def test_add_appends_a_classified_event(self):
+        self.run_cmd("add", "--thread", "T1", "--repo", "o/r", "--pr", "1", "--outcome", "fixed", "--at", "2026-10-20T00:00:00+00:00")
+        [e] = self.log()
+        time = int(datetime(2026, 10, 20, tzinfo=timezone.utc).timestamp() * 1000)
+        self.assertEqual({k: e[k] for k in ["key", "time", "collection", "objectId", "action", "version"]},
+                         {"key": f"{time}/threads/T1/classified/v1", "time": time, "collection": "threads", "objectId": "T1", "action": "classified", "version": "v1"})
+        self.assertEqual((e["data"]["outcome"], e["data"]["repo"], e["data"]["pr"]), ("fixed", "o/r", 1))
+
+    def test_render_records_a_github_snapshot_only_when_it_changes(self):
+        self.run_cmd("add", "--thread", "T1", "--repo", "o/r", "--pr", "1", "--outcome", "deferred")
+        self.fake_gh([self.gh_thread()])
+        self.run_cmd("render")
+        self.run_cmd("render")
+        self.assertEqual([e["action"] for e in self.log()], ["classified", "observed"])
+        self.fake_gh([self.gh_thread(resolved=True)])
+        self.run_cmd("render")
+        observed = [e for e in self.log() if e["action"] == "observed"]
+        self.assertEqual([e["data"]["resolved"] for e in observed], [False, True])
+        self.assertEqual(self.rows()[0]["ctx"]["resolved"], True)
+
+    def test_keeps_every_event_of_a_thread_that_is_still_active(self):
+        old = int((datetime.now(timezone.utc) - timedelta(days=40)).timestamp() * 1000)
+        with open(self.env["LOG_FILE"], "w") as f:
+            f.write(json.dumps({"key": f"{old}/threads/T1/classified/v1", "time": old, "collection": "threads", "objectId": "T1", "action": "classified",
+                                "data": {"thread": "T1", "repo": "o/r", "pr": 1, "outcome": "question"}, "version": "v1"}) + "\n")
+        self.run_cmd("add", "--thread", "T1", "--repo", "o/r", "--pr", "1", "--outcome", "fixed")
+        self.run_cmd("render")
+        self.assertEqual([e["data"]["outcome"] for e in self.log()], ["question", "fixed"])
+
+    def test_the_page_inlines_the_event_store(self):
+        self.run_cmd("render")
+        script = self.html().split("<script>")[1].split("</script>")[0]
+        with open(os.path.join(os.path.dirname(SCRIPT), "store.js")) as f:
+            self.assertIn(f.read(), script)
+        self.assertIn("new PFF.EventStore()", script)
+
+    def test_the_page_can_reload_the_log_from_a_picked_file(self):
+        self.run_cmd("render")
+        html = self.html()
+        self.assertIn('id="logPick"', html)
+        for s in ["showOpenFilePicker", "indexedDB", "queryPermission", "requestPermission", "setInterval(pollLog,30000)"]:
+            self.assertIn(s, html)
 
     def test_keeps_its_data_in_a_state_directory_outside_the_skill(self):
         env = {k: v for k, v in self.env.items() if k not in ("LOG_FILE", "REPORT_FILE")}
@@ -49,7 +113,7 @@ class ReportTest(unittest.TestCase):
     def test_a_thread_is_handled_when_resolved_or_my_comment_is_the_latest(self):
         self.run_cmd("render")
         html = self.html()
-        self.assertIn("handled=r=>{const c=r.ctx;return !!(c&&(c.resolved||c.comments.length&&c.comments[c.comments.length-1].author===ME))}", html)
+        self.assertIn("PFF.handled(r,ME)", html)
         self.assertNotRegex(html, r"(?i)replied=|not replied")
         self.assertNotIn('type="checkbox"', html)
         self.assertNotRegex(html, r"(?i)\bseen\b")
@@ -110,7 +174,8 @@ class ReportTest(unittest.TestCase):
         self.run_cmd("add", "--thread", "T1", "--repo", "o/r", "--pr", "1", "--outcome", "deferred")
         self.run_cmd("add", "--thread", "T2", "--repo", "o/none", "--pr", "2", "--outcome", "deferred")
         self.run_cmd("render")
-        self.assertEqual({r["thread"]: r.get("folder") for r in self.rows()}, {"T1": f"{code}/app", "T2": None})
+        self.assertEqual(self.folders(), {"o/r": f"{code}/app", "o/x": f"{code}/other"})
+        self.assertIn("FOLDERS[r.repo]", self.html())
         self.assertIn("claude://code/new?q=", self.html())
 
     def test_finds_checkouts_nested_under_apps_in_home_by_default(self):
@@ -121,7 +186,7 @@ class ReportTest(unittest.TestCase):
         self.env.pop("CODE_DIR", None)
         self.run_cmd("add", "--thread", "T1", "--repo", "o/r", "--pr", "1", "--outcome", "deferred")
         self.run_cmd("render")
-        self.assertEqual(self.rows()[0]["folder"], f"{self.dir}/apps/dns/app")
+        self.assertEqual(self.folders()["o/r"], f"{self.dir}/apps/dns/app")
 
     def test_reads_my_login_from_github(self):
         with open(f"{self.dir}/gh", "w") as f:
@@ -166,7 +231,7 @@ class ReportTest(unittest.TestCase):
         self.run_cmd("render")
         html = self.html()
         self.assertNotIn("sessionStorage", html)
-        self.assertEqual(set(re.findall(r"localStorage\.setItem\((\w+)", html)), {"FKEY", "HKEY"})
+        self.assertEqual(set(re.findall(r"localStorage\.setItem\((\w+)", html)), {"FKEY", "EKEY"})
 
     def test_celebrates_when_nothing_is_left_to_review(self):
         self.run_cmd("render")
@@ -180,7 +245,9 @@ class ReportTest(unittest.TestCase):
         html = self.html()
         self.assertIn('<dialog id="history"', html)
         self.assertIn('id="historyOpen"', html)
-        self.assertIn('HKEY="pr-feedback-fixer:history"', html)
+        self.assertIn('EKEY="pr-feedback-fixer:events"', html)
+        self.assertIn("PFF.history(", html)
+        self.assertNotIn("HKEY", html)
         for undo in ["deletePullRequestReviewComment", "unresolveReviewThread", "removeReaction", "addReaction"]:
             self.assertIn(undo, html)
 
@@ -229,6 +296,7 @@ class ReportTest(unittest.TestCase):
         self.run_cmd("render")
         self.assertEqual(self.rows()[0]["outcome"], "deferred")
         self.assertNotIn('"noted"', open(self.env["LOG_FILE"]).read())
+        self.assertEqual([(e["action"], e["objectId"]) for e in self.log()], [("classified", "T1")])
 
     def test_prunes_entries_older_than_30_days(self):
         old = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
