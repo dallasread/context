@@ -37,6 +37,8 @@ skills/*
 !skills/util-cqrs-ruby/**
 !skills/util-cqrs-js
 !skills/util-cqrs-js/**
+!skills/pr-feedback-fixer
+!skills/pr-feedback-fixer/**
 
 # Even in whitelisted skills: never secrets, browser profiles, or deps
 skills/*/credentials.json
