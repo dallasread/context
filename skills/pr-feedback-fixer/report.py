@@ -192,6 +192,10 @@ textarea{border-radius:10px;resize:vertical}
 .btn{font:inherit;font-size:14px;font-weight:600;border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:8px;padding:6px 12px;min-height:36px;cursor:pointer}
 .btn:hover{background:var(--hover)}.btn.primary{background:var(--focus);border-color:var(--focus);color:var(--on-focus)}.btn:disabled{opacity:.5;cursor:wait}
 .btn.small{min-height:30px;padding:3px 10px;font-size:13px;margin-top:8px}
+.menu{position:relative;margin-left:auto}.menu summary{list-style:none}.menu summary::-webkit-details-marker{display:none}
+.menu-list{position:absolute;right:0;top:calc(100% + 4px);z-index:5;min-width:210px;display:flex;flex-direction:column;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--bg);box-shadow:0 8px 24px rgba(0,0,0,.14)}
+.menu-item{font:inherit;font-size:14px;text-align:left;background:none;border:0;border-radius:6px;padding:8px 10px;color:var(--fg);cursor:pointer}.menu-item:hover{background:var(--hover)}
+.drop-zone{position:fixed;inset:0;z-index:20;display:grid;place-items:center;background:color-mix(in srgb,var(--bg) 85%,transparent);border:3px dashed var(--focus);font-size:20px;font-weight:600;pointer-events:none}.drop-zone[hidden]{display:none}
 .wrap{border:1px solid var(--line);border-radius:10px;overflow:hidden}
 table{width:100%;border-collapse:collapse}
 caption{text-align:left;padding:10px 14px;font-weight:600;color:var(--muted);background:var(--panel);border-bottom:1px solid var(--line)}
@@ -272,7 +276,8 @@ dialog::backdrop{background:rgba(15,23,42,.55)}dialog h2{margin:0 0 8px;font-siz
  tr.row td{border:0;padding:4px 0;display:grid;grid-template-columns:90px 1fr;gap:8px}tr.row td::before{content:attr(data-label);font-size:13px;font-weight:600;color:var(--muted)}
  .bubble{max-width:100%}}
 </style></head><body><main>
-<h1>PR Feedback Fixer</h1><p class="sub"><span>The latest state of each review thread from the last 30 days. Generated __GENERATED__.</span><button type="button" class="btn small" id="historyOpen">History</button><button type="button" class="btn small" id="logPick" hidden>Load log file</button><button type="button" class="btn small" id="forget" hidden>Forget GitHub token</button></p>
+<h1>PR Feedback Fixer</h1><div class="sub"><span>The latest state of each review thread from the last 30 days. Generated __GENERATED__.</span><span class="status" id="logStatus"></span><details class="menu"><summary class="btn small">Menu</summary><div class="menu-list"><button type="button" class="menu-item" id="historyOpen">History</button><button type="button" class="menu-item" id="logPick" hidden>Load log file…</button><button type="button" class="menu-item" id="forget" hidden>Forget GitHub token</button></div></details></div>
+<div id="dropZone" class="drop-zone" hidden><p>Drop log.jsonl to use it</p></div>
 <div class="filters" role="search">
 <div class="field"><label for="q">Search</label><input type="search" id="q" placeholder="Repository, title, comment, reviewer, commit"></div>
 <div class="field"><label for="status">Status</label><select id="status"><option value="">All</option><option value="no" selected>Needs you</option><option value="yes">Handled</option></select></div>
@@ -446,21 +451,34 @@ drawer.addEventListener("input",e=>{const t=e.target.dataset.draft;if(t)drafts.s
 drawer.addEventListener("keydown",e=>{if(e.target.closest("textarea,input"))return;if(e.key==="j"||e.key==="ArrowDown"&&e.altKey)nav(1);if(e.key==="k"||e.key==="ArrowUp"&&e.altKey)nav(-1)});
 drawer.addEventListener("close",()=>{const t=active;active=null;document.querySelectorAll("tr.row.active").forEach(tr=>tr.classList.remove("active"));
  const o=document.querySelector(`[data-open="${CSS.escape(t||"")}"]`);if(o)o.focus()});
-// Reload: a picked log file is re-read every 30 seconds and its new events merged in. The handle lives in IndexedDB.
+// Reload: a picked or dropped log file is re-read every 30 seconds and its new events merged in. The handle lives in IndexedDB.
 const IDB={open:()=>new Promise((res,rej)=>{const q=indexedDB.open("pr-feedback-fixer",1);q.onupgradeneeded=()=>q.result.createObjectStore("handles");q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error)}),
  get:async k=>{const db=await IDB.open();return new Promise(res=>{const q=db.transaction("handles").objectStore("handles").get(k);q.onsuccess=()=>res(q.result);q.onerror=()=>res(null)})},
  set:async(k,v)=>{const db=await IDB.open();return new Promise(res=>{const tx=db.transaction("handles","readwrite");tx.objectStore("handles").put(v,k);tx.oncomplete=tx.onerror=()=>res()})}};
 let logHandle=null, savedHandle=null, logStamp=0, polling=null;
 function redraw(){draw();if(histPane.open)drawHistory();
  const typing=document.activeElement&&document.activeElement.matches("#drawer textarea");if(active&&byId.has(active)&&!typing)openDrawer(active)}
-async function pollLog(){if(!logHandle)return;try{const f=await logHandle.getFile();if(f.lastModified===logStamp)return;logStamp=f.lastModified;
- if(store.restore(PFF.parseJsonl(await f.text()))){rebuild();redraw()}}catch(e){}}
+const logStatus=t=>$("logStatus").textContent=t;
+async function pollLog(){if(!logHandle)return;try{const f=await logHandle.getFile();if(f.lastModified!==logStamp){logStamp=f.lastModified;
+ if(store.restore(PFF.parseJsonl(await f.text()))){rebuild();redraw()}}logStatus("Using "+f.name+" · updated "+rel(new Date(f.lastModified).toISOString()))}catch(e){logStatus("Can't read "+logHandle.name+" any more. Load it again from the menu.")}}
 const pick=$("logPick");
-function watch(h){logHandle=h;savedHandle=null;pick.textContent="Reloading "+h.name;pollLog();if(!polling)polling=setInterval(pollLog,30000)}
+function watch(h){logHandle=h;savedHandle=null;logStamp=0;pick.textContent="Choose another log file…";logStatus("Using "+h.name);pollLog();if(!polling)polling=setInterval(pollLog,30000)}
 if(window.showOpenFilePicker){pick.hidden=false;
  IDB.get("log").then(async h=>{if(!h)return;if(await h.queryPermission({mode:"read"})==="granted")watch(h);else{savedHandle=h;pick.textContent="Reconnect "+h.name}}).catch(()=>{});
  pick.addEventListener("click",async()=>{try{if(savedHandle&&await savedHandle.requestPermission({mode:"read"})==="granted"){watch(savedHandle);return}
   const[h]=await showOpenFilePicker({types:[{description:"Event log",accept:{"text/plain":[".jsonl"]}}]});await IDB.set("log",h);watch(h)}catch(e){}})}
+const zone=$("dropZone"),hasFiles=e=>[...((e.dataTransfer&&e.dataTransfer.types)||[])].includes("Files");let dragDepth=0;
+addEventListener("dragenter",e=>{if(hasFiles(e)){dragDepth++;zone.hidden=false}});
+addEventListener("dragleave",e=>{if(hasFiles(e)&&--dragDepth<=0){dragDepth=0;zone.hidden=true}});
+addEventListener("dragover",e=>{if(hasFiles(e))e.preventDefault()});
+addEventListener("drop",async e=>{if(!hasFiles(e))return;e.preventDefault();dragDepth=0;zone.hidden=true;
+ const item=[...e.dataTransfer.items].find(i=>i.kind==="file"),file=item&&item.getAsFile(),hp=item&&item.getAsFileSystemHandle?item.getAsFileSystemHandle():null;
+ if(!file||!file.name.endsWith(".jsonl")){logStatus("Drop a .jsonl log file.");return}
+ const h=hp&&await hp.catch(()=>null);if(h&&h.kind==="file"){try{await IDB.set("log",h)}catch(err){}watch(h);return}
+ if(store.restore(PFF.parseJsonl(await file.text()))){rebuild();redraw()}logStatus("Loaded "+file.name+" once. This browser can't watch it for changes.")});
+const menu=document.querySelector(".menu");
+menu.addEventListener("click",e=>{if(e.target.closest(".menu-item"))menu.open=false});
+document.addEventListener("click",e=>{if(menu.open&&!menu.contains(e.target))menu.open=false});
 FIELDS.forEach(id=>$(id).addEventListener("input",()=>{saveFilters();draw()}));draw();
 """
 
