@@ -295,6 +295,13 @@ class ReportTest(unittest.TestCase):
         self.run_cmd("render")
         self.assertIn('<base target="_blank">', open(self.env["REPORT_FILE"]).read())
 
+    def test_has_an_inline_favicon(self):
+        self.run_cmd("render")
+        html = self.html()
+        self.assertIn('<link rel="icon" href="data:image/svg+xml,', html)
+        csp = re.search(r'http-equiv="Content-Security-Policy" content="([^"]+)"', html).group(1)
+        self.assertIn("img-src data:", csp)
+
     def test_add_takes_an_explicit_time(self):
         at = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat(timespec="seconds")
         self.run_cmd("add", "--thread", "T1", "--repo", "o/r", "--pr", "1", "--outcome", "fixed", "--at", at)

@@ -162,8 +162,8 @@ def render():
 
 PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-__CSP_HASH__'; style-src 'unsafe-inline'; img-src https://github.com https://avatars.githubusercontent.com; connect-src https://api.github.com; base-uri 'none'; form-action 'none'">
-<title>PR Feedback Fixer</title><base target="_blank">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-__CSP_HASH__'; style-src 'unsafe-inline'; img-src data: https://github.com https://avatars.githubusercontent.com; connect-src https://api.github.com; base-uri 'none'; form-action 'none'">
+<title>PR Feedback Fixer</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A4%96%3C/text%3E%3C/svg%3E"><base target="_blank">
 <style>
 :root{color-scheme:light dark;--bg:#fff;--panel:#f8fafc;--fg:#0f172a;--muted:#475569;--line:#cbd5e1;--zebra:#f8fafc;--hover:#eef2ff;--focus:#2563eb;--on-focus:#fff;--link:#1d4ed8;
  --bubble:#f1f5f9;--bubble-me:#dbeafe;--add:#dcfce7;--del:#fee2e2;
